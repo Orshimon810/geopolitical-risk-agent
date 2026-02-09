@@ -2,7 +2,7 @@ from langgraph.graph import StateGraph, END
 
 from georisk_agent.app.types import AgentState
 from georisk_agent.agents.nodes_planner import planner_node
-from georisk_agent.agents.nodes_research import research_node
+from georisk_agent.agents.nodes_rag_research import rag_research_node
 
 
 def build_graph():
@@ -12,13 +12,11 @@ def build_graph():
 
     graph = StateGraph(AgentState)
 
-    # Register agents
     graph.add_node("planner", planner_node)
-    graph.add_node("research", research_node)
+    graph.add_node("rag_research", rag_research_node)
 
-    # Define flow
     graph.set_entry_point("planner")
-    graph.add_edge("planner", "research")
-    graph.add_edge("research", END)
+    graph.add_edge("planner", "rag_research")
+    graph.add_edge("rag_research", END)
 
     return graph.compile()

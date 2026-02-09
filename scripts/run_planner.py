@@ -13,6 +13,6 @@ if __name__ == "__main__":
     for i, step in enumerate(result["plan"], 1):
         print(f"{i}. {step}")
 
-    print("\nCollected sources:")
-    for src in result["evidence"][:10]:
-        print(f"- {src['title']} ({src['url']})")
+    print("\nRetrieved evidence:")
+    for e in result["evidence"]:
+        print(f"- ({e['url']}) {e['snippet'][:120]}...")
