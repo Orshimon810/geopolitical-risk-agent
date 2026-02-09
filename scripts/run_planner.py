@@ -6,7 +6,7 @@ if __name__ == "__main__":
 
     result = app.invoke(
         {
-            "query": "What second-order economic effects could emerge if Iran significantly disrupts oil shipments through the Strait of Hormuz, and which sectors would likely benefit or suffer?"
+            "query": "What second- and third-order economic effects could result from a prolonged conflict between Israel and Iran, and which global assets would likely reprice first?"
         }
     )
 

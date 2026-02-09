@@ -14,6 +14,29 @@ llm = ChatOpenAI(
 )
 
 
+# 🔥 NEW — Institutional Output Rules
+MARKET_INSIGHT_RULES = """
+Provide concrete market intelligence suitable for institutional investors.
+
+Always reference specific asset classes when relevant, such as:
+- equities (regional or sector-specific)
+- oil benchmarks (Brent, WTI)
+- gold
+- sovereign bonds
+- currencies
+- defense stocks
+- shipping firms
+- commodities
+
+Avoid vague phrases like "markets may react".
+
+Instead explain:
+- which assets are likely to move first
+- transmission mechanisms
+- plausible timelines
+"""
+
+
 def _format_evidence(retrieved_chunks: List[Dict[str, Any]], max_items: int = 10) -> str:
     """
     Create a compact, numbered evidence context for the analysis agent.
@@ -37,12 +60,6 @@ def _format_evidence(retrieved_chunks: List[Dict[str, Any]], max_items: int = 10
 def analysis_node(state: AgentState) -> AgentState:
     """
     Market Impact Analysis Agent (final, evidence-grounded)
-
-    Outputs:
-    - market_impacts: evidence-backed bullets with citations [n]
-    - risks: scenario-based bullets with citations [n]
-    - confidence: Low | Medium | High
-    - sources: citation → source mapping
     """
 
     query = state.get("query", "")
@@ -53,7 +70,9 @@ def analysis_node(state: AgentState) -> AgentState:
     max_citation = min(len(retrieved_chunks), 12)
 
     prompt = f"""
-You are a geopolitical risk & markets analyst.
+You are a senior geopolitical risk analyst advising institutional investors.
+
+{MARKET_INSIGHT_RULES}
 
 User question:
 {query}
@@ -76,10 +95,17 @@ Rules:
 - Do not use citation numbers higher than [{max_citation}].
 - If evidence is thin, explicitly say so.
 
+IMPORTANT:
+Each MARKET_IMPACT bullet should reference at least one concrete asset, sector, or financial instrument whenever possible.
+
+Example style (do NOT copy, just follow the level of specificity):
+- "Brent crude could spike if supply disruptions materialize, potentially lifting global inflation expectations [2]."
+- "Defense equities may outperform broader indices as security spending rises [4]."
+
 Return EXACTLY this format:
 
 MARKET_IMPACTS:
-- <bullet (mechanism → effect) with citations like [1][3]>
+- <bullet (mechanism → asset → effect) with citations like [1][3]>
 - ...
 
 RISKS:
@@ -143,7 +169,7 @@ Notes:
             elif current == "sources":
                 sources.append(item)
 
-    # Fallbacks (defensive)
+    # Defensive fallbacks
     if not market_impacts:
         market_impacts = [
             "Available evidence was insufficient to derive clear market impacts."
