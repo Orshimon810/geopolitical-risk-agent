@@ -1,5 +1,6 @@
 from georisk_agent.agents.graph import build_graph
 
+
 if __name__ == "__main__":
     app = build_graph()
 
@@ -9,10 +10,17 @@ if __name__ == "__main__":
         }
     )
 
-    print("\nResearch plan:")
+    print("\n=== RESEARCH PLAN ===")
     for i, step in enumerate(result["plan"], 1):
         print(f"{i}. {step}")
 
-    print("\nRetrieved evidence:")
-    for e in result["evidence"]:
-        print(f"- ({e['url']}) {e['snippet'][:120]}...")
+    print("\n=== MARKET IMPACTS ===")
+    for b in result.get("market_impacts", []):
+        print(f"- {b}")
+
+    print("\n=== RISKS ===")
+    for r in result.get("risks", []):
+        print(f"- {r}")
+
+    print("\n=== CONFIDENCE ===")
+    print(result.get("confidence"))

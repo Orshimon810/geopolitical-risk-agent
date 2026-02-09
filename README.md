@@ -1,1 +1,2 @@
-readme
+Built an agentic geopolitical risk analysis system using LangGraph and RAG.
+The system decomposes complex geopolitical questions, retrieves evidence from a curated corpus via a vector database (Chroma), and produces evidence-grounded market impact analysis with explicit risk assessment and confidence estimation.
