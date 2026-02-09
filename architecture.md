@@ -1,4 +1,4 @@
-# 🧠 Architecture
+## 🧠 System Architecture
 
 ```mermaid
 flowchart TD
@@ -8,3 +8,4 @@ flowchart TD
     D --> E[Analysis Agent]
     E --> F[External Signals Agent]
     F --> G[Structured Output]
+```
