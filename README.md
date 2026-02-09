@@ -71,6 +71,22 @@ OPENAI_API_KEY=your_api_key_here
 ```
 ---
 
+## Knowledge Base (Optional)
+
+The agent supports Retrieval-Augmented Generation (RAG).
+
+To enable domain-specific intelligence, you can connect a custom knowledge base by ingesting documents such as:
+
+- Policy papers  
+- Intelligence reports  
+- Financial analyses  
+- Geopolitical research  
+- Internal PDFs  
+
+If no knowledge base is provided, the system falls back to model reasoning + external signals.
+
+---
+
 ## 🖥️ Interfaces
 
 ### Streamlit UI
