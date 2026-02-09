@@ -16,8 +16,7 @@ llm = ChatOpenAI(
 
 def _format_evidence(retrieved_chunks: List[Dict[str, Any]], max_items: int = 10) -> str:
     """
-    Create a compact, readable evidence context for the analysis agent.
-    We keep it short to control cost and reduce noise.
+    Create a compact, numbered evidence context for the analysis agent.
     """
     lines = []
     for i, c in enumerate(retrieved_chunks[:max_items], 1):
@@ -25,22 +24,25 @@ def _format_evidence(retrieved_chunks: List[Dict[str, Any]], max_items: int = 10
         src = (c.get("source") or "local_corpus").strip()
         txt = (c.get("text") or "").strip().replace("\n", " ")
 
-        # keep each snippet short
         if len(txt) > 240:
             txt = txt[:240] + "..."
 
-        lines.append(f"[{i}] source={src} | question={q}\n    snippet={txt}")
+        lines.append(
+            f"[{i}] source={src} | question={q}\n"
+            f"    snippet={txt}"
+        )
     return "\n".join(lines)
 
 
 def analysis_node(state: AgentState) -> AgentState:
     """
-    Market Impact Analysis Agent
+    Market Impact Analysis Agent (with citations)
 
-    Responsibilities:
-    - Use retrieved_chunks (RAG evidence) to infer market impact mechanisms
-    - Output: market_impacts (bullets), risks (bullets), confidence (Low/Med/High)
-    - No investment advice; neutral analytical tone
+    Outputs:
+    - market_impacts: bullets with [n] citations
+    - risks: bullets with [n] citations
+    - confidence: Low | Medium | High
+    - sources: mapping of citation numbers to sources
     """
 
     query = state.get("query", "")
@@ -67,30 +69,39 @@ Produce an evidence-grounded market impact analysis.
 Rules:
 - Be neutral and analytical.
 - Do NOT give investment advice (no "buy/sell", no price targets).
+- Use citations ONLY in the form [n] where n refers to an evidence item shown above.
+- Do not cite numbers that do not exist.
 - Base claims on the evidence. If evidence is thin, say so.
-- Return EXACTLY this format:
+- Do not use citation numbers higher than the number of evidence items shown.
+
+Return EXACTLY this format:
 
 MARKET_IMPACTS:
-- <bullet 1>
-- <bullet 2>
-- <bullet 3>
+- <bullet (mechanism → effect) with citations like [1][3]>
+- ...
 
 RISKS:
-- <bullet 1>
-- <bullet 2>
-- <bullet 3>
+- <bullet with citations like [2]>
+- ...
 
 CONFIDENCE: <Low|Medium|High>
 
-Write 3–6 bullets per section. Keep bullets specific (mechanism → effect).
+SOURCES:
+- [1] <source filename or identifier>
+- [2] <source filename or identifier>
+
+Notes:
+- 3–6 bullets per section.
+- Keep bullets specific and non-redundant.
 """
 
     resp = llm.invoke(prompt)
     text = (resp.content or "").strip()
 
-    # Parse sections (robust to minor variations)
+    # Parse sections
     market_impacts: List[str] = []
     risks: List[str] = []
+    sources: List[str] = []
     confidence = "Medium"
 
     current = None
@@ -106,8 +117,10 @@ Write 3–6 bullets per section. Keep bullets specific (mechanism → effect).
         if upper.startswith("RISKS"):
             current = "risks"
             continue
+        if upper.startswith("SOURCES"):
+            current = "sources"
+            continue
         if upper.startswith("CONFIDENCE"):
-            # e.g., "CONFIDENCE: Medium"
             parts = s.split(":", 1)
             if len(parts) == 2:
                 conf = parts[1].strip().capitalize()
@@ -120,22 +133,30 @@ Write 3–6 bullets per section. Keep bullets specific (mechanism → effect).
             item = s.lstrip("-").strip()
             if not item:
                 continue
+
             if current == "market":
                 market_impacts.append(item)
             elif current == "risks":
                 risks.append(item)
+            elif current == "sources":
+                sources.append(item)
 
-    # Fallback in case formatting was off
+    # Fallbacks
     if not market_impacts:
-        market_impacts = ["Evidence was insufficiently structured to extract market impacts reliably."]
+        market_impacts = [
+            "Evidence was insufficiently structured to extract market impacts reliably."
+        ]
     if not risks:
-        risks = ["Evidence was insufficiently structured to extract risks reliably."]
+        risks = [
+            "Evidence was insufficiently structured to extract risks reliably."
+        ]
 
     return {
         **state,
         "market_impacts": market_impacts[:8],
         "risks": risks[:8],
         "confidence": confidence,
+        "sources": sources,
         "debug": {
             **(state.get("debug") or {}),
             "analysis_raw_output": text,
