@@ -36,13 +36,13 @@ def _format_evidence(retrieved_chunks: List[Dict[str, Any]], max_items: int = 10
 
 def analysis_node(state: AgentState) -> AgentState:
     """
-    Market Impact Analysis Agent (with citations)
+    Market Impact Analysis Agent (final, evidence-grounded)
 
     Outputs:
-    - market_impacts: bullets with [n] citations
-    - risks: bullets with [n] citations
+    - market_impacts: evidence-backed bullets with citations [n]
+    - risks: scenario-based bullets with citations [n]
     - confidence: Low | Medium | High
-    - sources: mapping of citation numbers to sources
+    - sources: citation → source mapping
     """
 
     query = state.get("query", "")
@@ -50,6 +50,7 @@ def analysis_node(state: AgentState) -> AgentState:
     retrieved_chunks: List[Dict[str, Any]] = state.get("retrieved_chunks", [])
 
     evidence_block = _format_evidence(retrieved_chunks, max_items=12)
+    max_citation = min(len(retrieved_chunks), 12)
 
     prompt = f"""
 You are a geopolitical risk & markets analyst.
@@ -69,10 +70,11 @@ Produce an evidence-grounded market impact analysis.
 Rules:
 - Be neutral and analytical.
 - Do NOT give investment advice (no "buy/sell", no price targets).
+- MARKET_IMPACTS must be directly supported by the evidence.
+- RISKS should be framed as potential or scenario-based (use "could", "may", "in a downside scenario").
 - Use citations ONLY in the form [n] where n refers to an evidence item shown above.
-- Do not cite numbers that do not exist.
-- Base claims on the evidence. If evidence is thin, say so.
-- Do not use citation numbers higher than the number of evidence items shown.
+- Do not use citation numbers higher than [{max_citation}].
+- If evidence is thin, explicitly say so.
 
 Return EXACTLY this format:
 
@@ -81,7 +83,7 @@ MARKET_IMPACTS:
 - ...
 
 RISKS:
-- <bullet with citations like [2]>
+- <scenario-based bullet with citations like [2]>
 - ...
 
 CONFIDENCE: <Low|Medium|High>
@@ -141,14 +143,14 @@ Notes:
             elif current == "sources":
                 sources.append(item)
 
-    # Fallbacks
+    # Fallbacks (defensive)
     if not market_impacts:
         market_impacts = [
-            "Evidence was insufficiently structured to extract market impacts reliably."
+            "Available evidence was insufficient to derive clear market impacts."
         ]
     if not risks:
         risks = [
-            "Evidence was insufficiently structured to extract risks reliably."
+            "Downside risks could not be clearly derived from the current evidence base."
         ]
 
     return {
