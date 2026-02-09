@@ -1,35 +1,60 @@
 import requests
-from bs4 import BeautifulSoup
 from typing import List, Dict
+from urllib.parse import quote_plus
 
 
-def duckduckgo_search(query: str, max_results: int = 5) -> List[Dict[str, str]]:
+def gdelt_search(query: str, max_results: int = 5) -> List[Dict[str, str]]:
     """
-    Perform a lightweight DuckDuckGo HTML search.
-    No API key required.
+    Search recent global news via the GDELT Project (no API key required).
 
-    Returns a list of:
-    { title, url }
+    Robust against:
+    - Non-JSON responses
+    - Empty responses
+    - Temporary API issues
     """
 
-    url = "https://duckduckgo.com/html/"
-    response = requests.post(
-        url,
-        data={"q": query},
-        timeout=15,
-        headers={"User-Agent": "Mozilla/5.0"},
+    q = quote_plus(query)
+
+    url = (
+        "https://api.gdeltproject.org/api/v2/doc/doc"
+        f"?query={q}"
+        "&mode=ArtList"
+        "&format=json"
+        "&maxrecords=50"
+        "&sourcelang=english"
+        "&sort=HybridRel"
     )
-    response.raise_for_status()
 
-    soup = BeautifulSoup(response.text, "html.parser")
-    results = []
+    try:
+        resp = requests.get(url, timeout=20)
+        resp.raise_for_status()
 
-    for link in soup.select(".result__a")[:max_results]:
-        results.append(
-            {
-                "title": link.get_text(strip=True),
-                "url": link.get("href"),
-            }
-        )
+        # Guard: ensure JSON response
+        content_type = resp.headers.get("Content-Type", "")
+        if "application/json" not in content_type.lower():
+            return []
+
+        data = resp.json()
+
+    except Exception:
+        # Any failure → return empty results (do not crash agent)
+        return []
+
+    results: List[Dict[str, str]] = []
+
+    for article in data.get("articles", []):
+        title = article.get("title", "").strip()
+        url = article.get("url", "").strip()
+
+        if title and url:
+            results.append(
+                {
+                    "title": title,
+                    "url": url,
+                }
+            )
+
+        if len(results) >= max_results:
+            break
 
     return results

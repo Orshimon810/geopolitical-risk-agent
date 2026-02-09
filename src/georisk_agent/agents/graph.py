@@ -1,6 +1,8 @@
 from langgraph.graph import StateGraph, END
+
 from georisk_agent.app.types import AgentState
 from georisk_agent.agents.nodes_planner import planner_node
+from georisk_agent.agents.nodes_research import research_node
 
 
 def build_graph():
@@ -10,13 +12,13 @@ def build_graph():
 
     graph = StateGraph(AgentState)
 
-    # Register agents (nodes)
+    # Register agents
     graph.add_node("planner", planner_node)
+    graph.add_node("research", research_node)
 
-    # Define entry point
+    # Define flow
     graph.set_entry_point("planner")
-
-    # Define end of workflow
-    graph.add_edge("planner", END)
+    graph.add_edge("planner", "research")
+    graph.add_edge("research", END)
 
     return graph.compile()
