@@ -24,3 +24,14 @@ if __name__ == "__main__":
 
     print("\n=== CONFIDENCE ===")
     print(result.get("confidence"))
+
+    print("\n=== EXTERNAL SIGNALS ===")
+    signals = result.get("signals", {})
+    trade = signals.get("trade_openness", {})
+
+    if trade:
+        print("Trade (% of GDP):")
+        print("  US   :", trade.get("us"))
+        print("  China:", trade.get("china"))
+    else:
+        print("No external signals available.")

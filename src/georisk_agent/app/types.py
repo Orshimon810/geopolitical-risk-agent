@@ -29,6 +29,9 @@ class AgentState(TypedDict, total=False):
     # Research phase
     evidence: List[Evidence]
     retrieved_chunks: List[Dict[str, Any]]
+    
+    # Signals
+    signals: Dict[str, Any]
 
     # Analysis phases
     market_impacts: List[str]

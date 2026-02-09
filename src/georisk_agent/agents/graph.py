@@ -4,12 +4,13 @@ from georisk_agent.app.types import AgentState
 from georisk_agent.agents.nodes_planner import planner_node
 from georisk_agent.agents.nodes_rag_research import rag_research_node
 from georisk_agent.agents.nodes_analysis import analysis_node
+from georisk_agent.agents.nodes_signals import signals_node
 
 
 def build_graph():
     """
     Full Agentic workflow:
-    Planner -> RAG Research -> Analysis
+    Planner -> RAG Research -> Analysis -> External Signals
     """
 
     graph = StateGraph(AgentState)
@@ -17,10 +18,12 @@ def build_graph():
     graph.add_node("planner", planner_node)
     graph.add_node("rag_research", rag_research_node)
     graph.add_node("analysis", analysis_node)
+    graph.add_node("signals", signals_node)
 
     graph.set_entry_point("planner")
     graph.add_edge("planner", "rag_research")
     graph.add_edge("rag_research", "analysis")
-    graph.add_edge("analysis", END)
+    graph.add_edge("analysis", "signals")
+    graph.add_edge("signals", END)
 
     return graph.compile()
