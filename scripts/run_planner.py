@@ -6,7 +6,7 @@ if __name__ == "__main__":
 
     result = app.invoke(
         {
-            "query": "How could escalating tensions between the US and China impact global markets over the next year?"
+            "query": "What second-order economic effects could emerge if Iran significantly disrupts oil shipments through the Strait of Hormuz, and which sectors would likely benefit or suffer?"
         }
     )
 
@@ -27,11 +27,10 @@ if __name__ == "__main__":
 
     print("\n=== EXTERNAL SIGNALS ===")
     signals = result.get("signals", {})
-    trade = signals.get("trade_openness", {})
+    countries = signals.get("countries", {})
 
-    if trade:
-        print("Trade (% of GDP):")
-        print("  US   :", trade.get("us"))
-        print("  China:", trade.get("china"))
+    if not countries:
+     print(signals.get("note", "No external signals available."))
     else:
-        print("No external signals available.")
+      for iso, data in countries.items():
+           print(f"{iso}: {data}")

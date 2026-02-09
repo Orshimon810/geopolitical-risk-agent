@@ -3,6 +3,22 @@ from typing import Dict, Any
 
 from georisk_agent.app.types import AgentState
 
+COUNTRY_NAME_TO_ISO = {
+    "united states": "USA",
+    "us": "USA",
+    "usa": "USA",
+    "china": "CHN",
+    "germany": "DEU",
+    "russia": "RUS",
+    "india": "IND",
+    "japan": "JPN",
+    "south korea": "KOR",
+    "korea": "KOR",
+    "france": "FRA",
+    "united kingdom": "GBR",
+    "uk": "GBR",
+}
+
 
 WORLD_BANK_API = "https://api.worldbank.org/v2/country/{country}/indicator/{indicator}?format=json"
 
@@ -46,22 +62,50 @@ def fetch_trade_gdp(country: str = "USA") -> Dict[str, Any]:
 
 def signals_node(state: AgentState) -> AgentState:
     """
-    External Signals Agent
+    Context-aware External Signals Agent.
 
-    Adds macroeconomic context without affecting core analysis.
+    Determines relevant countries from the query and planner output,
+    then fetches macroeconomic indicators only for those countries.
     """
-    signals = {}
 
-    us_trade = fetch_trade_gdp("USA")
-    china_trade = fetch_trade_gdp("CHN")
+    query = state.get("query", "")
+    plan = " ".join(state.get("plan", []))
 
-    signals["trade_openness"] = {
-        "us": us_trade,
-        "china": china_trade,
+    combined_text = f"{query} {plan}"
+    countries = extract_relevant_countries(combined_text)
+
+    signals = {
         "indicator": "Trade (% of GDP)",
+        "countries": {},
     }
+
+    if not countries:
+        signals["note"] = "No relevant countries detected from query."
+        return {
+            **state,
+            "signals": signals,
+        }
+
+    for iso in countries:
+        signals["countries"][iso] = fetch_trade_gdp(iso)
 
     return {
         **state,
         "signals": signals,
     }
+
+
+def extract_relevant_countries(text: str) -> list[str]:
+    """
+    Naive country extraction based on keyword matching.
+    Suitable for controlled signals enrichment.
+    """
+    text = text.lower()
+    found = set()
+
+    for name, iso in COUNTRY_NAME_TO_ISO.items():
+        if name in text:
+            found.add(iso)
+
+    return list(found)
+
