@@ -1,6 +1,26 @@
-Built an agentic geopolitical risk analysis system using LangGraph and RAG.
-The system decomposes complex geopolitical questions, retrieves evidence from a curated corpus via a vector database (Chroma), and produces evidence-grounded market impact analysis with explicit risk assessment and confidence estimation.
+# GeoRisk Intelligence Engine
 
+A multi-agent geopolitical risk intelligence system designed to generate evidence-backed market insights from global geopolitical developments.
+
+This is not a chatbot — it is a structured decision-support system that combines agentic reasoning, retrieval grounding, and market-aware analysis.
+
+---
+
+## Overview
+
+GeoRisk Intelligence Engine analyzes geopolitical scenarios and translates them into actionable market intelligence.
+
+The system orchestrates multiple specialized agents to:
+
+- Break down complex geopolitical questions  
+- Retrieve intelligence from a curated knowledge base  
+- Generate evidence-grounded analysis  
+- Identify market impacts and downside risks  
+- Produce structured, institutional-style reports  
+
+Built to demonstrate production-oriented AI engineering practices rather than experimental prompting.
+
+---
 
 ## System Architecture
 
@@ -14,6 +34,4 @@ C --> D[Evidence Store]
 
 D --> E[Analysis Agent]
 
-E --> F[Signals Agent]
-
-F --> G[Structured Intelligence Report]
+E --> F[Structured Intelligence Report]
