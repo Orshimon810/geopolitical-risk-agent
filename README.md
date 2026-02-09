@@ -71,6 +71,42 @@ OPENAI_API_KEY=your_api_key_here
 ```
 ---
 
+## Knowledge Base (Optional)
+
+The agent supports Retrieval-Augmented Generation (RAG).
+
+To enable domain-specific intelligence, you can connect a custom knowledge base by ingesting documents such as:
+
+- Policy papers  
+- Intelligence reports  
+- Financial analyses  
+- Geopolitical research  
+- Internal PDFs  
+
+If no knowledge base is provided, the system falls back to model reasoning + external signals.
+
+---
+
+## ✅ Evaluation (Built-in Evaluator)
+
+This project includes a lightweight, automated evaluation layer to measure agent response quality across a small benchmark suite.
+
+### What it checks
+The evaluator scores each response (0–10) using practical, production-oriented heuristics:
+
+- **Risk analysis presence + depth** (e.g., multiple distinct risks)
+- **External signals coverage** (signal-aware reasoning)
+- **Market / asset-level impacts** (decision-grade relevance)
+- **Scenario thinking** (base/escalation framing)
+- **Confidence reporting** (with sanity checks for over/under-confidence)
+- **Decision utility** (actionable takeaways such as “monitor / hedge / prepare”)
+
+### Run evaluation
+```bash
+python evaluate/run_eval.py
+```
+---
+
 ## 🖥️ Interfaces
 
 ### Streamlit UI
