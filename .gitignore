@@ -10,6 +10,10 @@ __pycache__/
 .chroma/
 chroma/
 
+# RAG corpus (local data only)
+data/documents/*.pdf
+data/documents/*.txt
+
 # Distribution / packaging
 .Python
 build/
