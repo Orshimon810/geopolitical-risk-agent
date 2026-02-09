@@ -1,0 +1,25 @@
+[project]
+name = "geopolitical-risk-agent"
+version = "0.1.0"
+description = "Autonomous geopolitical risk & markets research agent (Agentic + RAG)"
+readme = "README.md"
+requires-python = ">=3.10"
+
+dependencies = [
+  "langchain>=0.2.10",
+  "langgraph>=0.2.0",
+  "langchain-openai>=0.1.20",
+  "python-dotenv>=1.0.1",
+  "pydantic>=2.7.0",
+  "fastapi>=0.111.0",
+  "uvicorn>=0.30.0",
+  "streamlit>=1.36.0",
+  "requests>=2.32.0",
+  "beautifulsoup4>=4.12.0",
+  "tiktoken>=0.7.0",
+  "chromadb>=0.5.0",
+  "pytest>=8.2.0"
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
