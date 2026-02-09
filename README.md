@@ -16,6 +16,7 @@ This project implements an end-to-end **agentic pipeline** that:
 - Produces structured, evidence-backed market impact assessments
 
 The system is designed to resemble **internal research tools** used by risk, policy, and strategy teams.
+The system is orchestrated using a **LangGraph-based agent state machine**.
 
 ---
 
@@ -65,7 +66,7 @@ Run an interactive end-to-end analysis:
 ```bash
 streamlit run ui/app.py 
 ```
-## CLI
+### CLI
 ```bash
 python scripts/run_planner.py
 ```
