@@ -14,7 +14,7 @@ llm = ChatOpenAI(
 )
 
 
-# 🔥 NEW — Institutional Output Rules
+# 🔥 Institutional Output Rules
 MARKET_INSIGHT_RULES = """
 Provide concrete market intelligence suitable for institutional investors.
 
@@ -59,7 +59,7 @@ def _format_evidence(retrieved_chunks: List[Dict[str, Any]], max_items: int = 10
 
 def analysis_node(state: AgentState) -> AgentState:
     """
-    Market Impact Analysis Agent (final, evidence-grounded)
+    Market Impact Analysis Agent (final, evidence-grounded, scenario-aware)
     """
 
     query = state.get("query", "")
@@ -90,60 +90,73 @@ Rules:
 - Be neutral and analytical.
 - Do NOT give investment advice (no "buy/sell", no price targets).
 - MARKET_IMPACTS must be directly supported by the evidence.
-- RISKS should be framed as potential or scenario-based (use "could", "may", "in a downside scenario").
+- RISKS should be framed as potential or scenario-based.
 - Use citations ONLY in the form [n] where n refers to an evidence item shown above.
 - Do not use citation numbers higher than [{max_citation}].
 - If evidence is thin, explicitly say so.
 
 IMPORTANT:
-Each MARKET_IMPACT bullet should reference at least one concrete asset, sector, or financial instrument whenever possible.
-
-Example style (do NOT copy, just follow the level of specificity):
-- "Brent crude could spike if supply disruptions materialize, potentially lifting global inflation expectations [2]."
-- "Defense equities may outperform broader indices as security spending rises [4]."
+Each MARKET_IMPACT bullet must reference at least one concrete asset or financial instrument.
 
 Return EXACTLY this format:
 
 MARKET_IMPACTS:
-- <bullet (mechanism → asset → effect) with citations like [1][3]>
-- ...
+- <mechanism → asset → effect [citations]>
 
 RISKS:
-- <scenario-based bullet with citations like [2]>
-- ...
+- <scenario-based risk [citations]>
+
+SCENARIOS:
+- Base case: <most likely outcome>
+- Escalation case: <higher-impact but plausible outcome>
+
+INVESTOR_TAKEAWAY:
+- <one clear, decision-oriented insight>
 
 CONFIDENCE: <Low|Medium|High>
 
 SOURCES:
-- [1] <source filename or identifier>
-- [2] <source filename or identifier>
+- [1] <source identifier>
 
 Notes:
-- 3–6 bullets per section.
+- 3–6 bullets per section (where applicable).
 - Keep bullets specific and non-redundant.
 """
 
     resp = llm.invoke(prompt)
     text = (resp.content or "").strip()
 
-    # Parse sections
+    # -------------------------
+    # Parse structured sections
+    # -------------------------
+
     market_impacts: List[str] = []
     risks: List[str] = []
+    scenarios: List[str] = []
+    investor_takeaway: List[str] = []
     sources: List[str] = []
     confidence = "Medium"
 
     current = None
+
     for line in text.splitlines():
         s = line.strip()
         if not s:
             continue
 
         upper = s.upper()
+
         if upper.startswith("MARKET_IMPACTS"):
             current = "market"
             continue
         if upper.startswith("RISKS"):
             current = "risks"
+            continue
+        if upper.startswith("SCENARIOS"):
+            current = "scenarios"
+            continue
+        if upper.startswith("INVESTOR_TAKEAWAY"):
+            current = "takeaway"
             continue
         if upper.startswith("SOURCES"):
             current = "sources"
@@ -166,23 +179,44 @@ Notes:
                 market_impacts.append(item)
             elif current == "risks":
                 risks.append(item)
+            elif current == "scenarios":
+                scenarios.append(item)
+            elif current == "takeaway":
+                investor_takeaway.append(item)
             elif current == "sources":
                 sources.append(item)
 
+    # -------------------------
     # Defensive fallbacks
+    # -------------------------
+
     if not market_impacts:
         market_impacts = [
             "Available evidence was insufficient to derive clear market impacts."
         ]
+
     if not risks:
         risks = [
             "Downside risks could not be clearly derived from the current evidence base."
+        ]
+
+    if not scenarios:
+        scenarios = [
+            "Base case: Gradual deterioration without immediate market dislocation.",
+            "Escalation case: Rapid geopolitical shock with spillover into global markets.",
+        ]
+
+    if not investor_takeaway:
+        investor_takeaway = [
+            "Investors may want to monitor escalation indicators and exposure to affected assets."
         ]
 
     return {
         **state,
         "market_impacts": market_impacts[:8],
         "risks": risks[:8],
+        "scenarios": scenarios[:4],
+        "investor_takeaway": investor_takeaway[:2],
         "confidence": confidence,
         "sources": sources,
         "debug": {
