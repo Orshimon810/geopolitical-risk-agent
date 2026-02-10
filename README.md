@@ -139,6 +139,61 @@ streamlit run ui/app.py
 python scripts/run_planner.py
 ```
 ---
+## 📊 Example Analyses
+
+Below are selected example outputs demonstrating the agent’s ability to
+identify first-mover assets, transmission channels, and market mispricing
+across different geopolitical scenarios.
+
+---
+
+### 1️⃣ Strait of Hormuz – Oil Shock & Inflation Spillover
+
+**Prompt focus**
+- Brent crude & global inflation expectations  
+- US, EU, and Asian equities  
+- Base vs escalation scenario
+
+[📸 View full analysis screenshot](assets/hormuz.png)
+
+**Why this example matters**
+- Clear identification of **first-repricing assets** (oil, energy equities)
+- Explicit inflation transmission into equities
+- Distinction between short disruption vs escalation risk
+
+---
+
+### 2️⃣ Emerging Market Political Shock – Credit Contagion
+
+**Prompt focus**
+- Sovereign CDS, HY spreads, EM FX  
+- Spillover into US & EU equities  
+- Base vs escalation scenario
+
+[📸 View full analysis screenshot](assets/em-credit-contagion.png)
+
+**Why this example matters**
+- Demonstrates **credit-first repricing logic**
+- Highlights underpriced contagion risk
+- Connects EM stress to developed market equities via liquidity channels
+
+---
+
+### 3️⃣ Global Risk-Off Scenario – Cross-Asset Repricing
+
+**Prompt focus**
+- First-mover asset classes  
+- Transmission channels  
+- Global base vs escalation dynamics
+
+[📸 View full analysis screenshot](assets/global-risk-off.png)
+
+**Why this example matters**
+- Shows cross-asset sequencing (equities → commodities → safe havens)
+- Avoids vague language, focuses on mechanisms
+- Conservative confidence assignment under uncertainty
+
+---
 
 ## ⚙️ Tech Stack
 
