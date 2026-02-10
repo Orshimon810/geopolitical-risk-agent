@@ -27,8 +27,8 @@ flowchart TD
     A[User Query] --> B[Planner Agent]
     B --> C[RAG Retriever]
     C --> D[Vector Store]
-    D --> E[Analysis Agent]
-    E --> F[External Signals Agent]
+    D --> E[External Signals Agent]
+    E --> F[Analysis Agent]
     F --> G[Structured Output]
 ```
 ---
@@ -87,19 +87,38 @@ If no knowledge base is provided, the system falls back to model reasoning + ext
 
 ---
 
-## ✅ Evaluation (Built-in Evaluator)
+## ✅ Evaluation Framework
 
-This project includes a lightweight, automated evaluation layer to measure agent response quality across a small benchmark suite.
+This project includes a built-in evaluation layer designed to measure agent reasoning quality — not just fluency.
 
-### What it checks
-The evaluator scores each response (0–10) using practical, production-oriented heuristics:
+Rather than relying on subjective inspection, responses are scored automatically against a benchmark suite that includes both standard and adversarial queries.
 
-- **Risk analysis presence + depth** (e.g., multiple distinct risks)
-- **External signals coverage** (signal-aware reasoning)
-- **Market / asset-level impacts** (decision-grade relevance)
-- **Scenario thinking** (base/escalation framing)
-- **Confidence reporting** (with sanity checks for over/under-confidence)
-- **Decision utility** (actionable takeaways such as “monitor / hedge / prepare”)
+### What the evaluator measures
+
+Each response is scored on a **0–10 scale** using production-oriented heuristics:
+
+- **Risk analysis depth** — presence of multiple, distinct downside risks  
+- **External signal awareness** — ability to incorporate macro indicators into reasoning  
+- **Market / asset-level impacts** — decision-grade relevance for investors  
+- **Scenario construction** — structured base vs. escalation thinking  
+- **Confidence calibration** — avoids unjustified certainty or default neutrality  
+- **Decision utility** — clear, actionable investor takeaway  
+
+Perfect scores are intentionally rare — the evaluator caps inflated ratings when analytical depth is limited.
+
+---
+
+### Adversarial Benchmarking
+
+The benchmark intentionally includes ambiguity and false-premise queries to stress-test:
+
+- reasoning robustness  
+- hallucination resistance  
+- confidence discipline  
+
+This helps ensure the agent behaves more like an institutional risk analyst than a generic LLM.
+
+---
 
 ### Run evaluation
 ```bash
