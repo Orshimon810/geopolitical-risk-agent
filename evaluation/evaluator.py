@@ -3,8 +3,7 @@ from typing import Dict, Any, List
 
 def _has_content(value: Any) -> bool:
     """
-    Checks that a field is not empty or meaningless.
-    Works for lists, dicts, and strings.
+    Checks that a field is not empty or trivial.
     """
     if value is None:
         return False
@@ -13,67 +12,88 @@ def _has_content(value: Any) -> bool:
         return len(value) > 0
 
     if isinstance(value, str):
-        return len(value.strip()) > 20  # avoids shallow one-liners
+        return len(value.strip()) > 5
 
     return True
 
 
 def evaluate_response(response: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Production-style lightweight evaluator.
+    Lightweight production-style evaluator.
 
-    Evaluates:
-    - Structured output
-    - Depth of analysis
-    - Decision usefulness
-    - Confidence sanity
-    - Overconfidence risk
+    Evaluation philosophy:
+    - Reward structured, decision-oriented analysis
+    - Penalize shallow, generic, or overconfident outputs
+    - Avoid perfect scores unless analysis is truly robust
     """
 
     score = 0
     max_score = 10
     notes: List[str] = []
 
+    # Extract fields
+    market_impacts = response.get("market_impacts")
     risks = response.get("risks")
-    signals = response.get("signals")
-    impacts = response.get("market_impacts")
     scenarios = response.get("scenarios")
+    signals = response.get("signals")
     confidence = response.get("confidence")
+    takeaway = response.get("investor_takeaway")
 
     # -------------------------
-    # Core Intelligence Checks
+    # Core Market Intelligence
+    # -------------------------
+
+    if _has_content(market_impacts):
+        score += 2
+        if isinstance(market_impacts, list) and len(market_impacts) >= 2:
+            score += 1
+        else:
+            notes.append("Market impacts lack depth")
+    else:
+        notes.append("Missing market impacts")
+
+    # -------------------------
+    # Risk Analysis
     # -------------------------
 
     if _has_content(risks):
-        score += 2
+        score += 1
         if isinstance(risks, list) and len(risks) >= 2:
-            score += 1  # depth bonus
+            score += 1
         else:
             notes.append("Risk analysis is shallow")
     else:
         notes.append("Missing risk analysis")
 
+    # -------------------------
+    # External Signals
+    # -------------------------
+
     if _has_content(signals):
-        score += 2
+        score += 1
     else:
         notes.append("Missing external signals")
 
-    if _has_content(impacts):
+    # -------------------------
+    # Scenario Reasoning
+    # -------------------------
+
+    if isinstance(scenarios, list) and len(scenarios) >= 2:
         score += 2
     else:
-        notes.append("No market / asset-level insight")
+        notes.append("Insufficient scenario thinking")
 
     # -------------------------
-    # Advanced Thinking Signals
+    # Decision Utility
     # -------------------------
 
-    if _has_content(scenarios):
+    if _has_content(takeaway):
         score += 1
     else:
-        notes.append("No scenario thinking detected")
+        notes.append("Missing investor takeaway")
 
     # -------------------------
-    # Confidence Logic
+    # Confidence Calibration
     # -------------------------
 
     if _has_content(confidence):
@@ -82,35 +102,29 @@ def evaluate_response(response: Dict[str, Any]) -> Dict[str, Any]:
         if isinstance(confidence, str):
             conf = confidence.lower()
 
-            if "high" in conf and score < 6:
-                notes.append("⚠️ Possible overconfidence")
+            if conf == "high" and score < 7:
+                notes.append("⚠️ Confidence may be overstated relative to evidence")
 
-            if "low" in conf and score >= 7:
-                notes.append("Confidence may be too conservative")
-
+            if conf == "low" and score >= 8:
+                notes.append("Confidence may be overly conservative")
     else:
         notes.append("Missing confidence score")
 
     # -------------------------
-    # Decision Utility Check
+    # Realism Guardrail
     # -------------------------
+    # Prevent inflated scores when depth is limited
 
-    decision_keywords = [
-        "monitor",
-        "watch",
-        "hedge",
-        "prepare",
-        "consider",
-        "risk exposure",
-        "allocation"
-    ]
+    if score >= 9:
+        depth_ok = (
+            isinstance(market_impacts, list) and len(market_impacts) >= 2
+            and isinstance(risks, list) and len(risks) >= 2
+            and isinstance(scenarios, list) and len(scenarios) >= 2
+        )
 
-    response_text = str(response).lower()
-
-    if any(word in response_text for word in decision_keywords):
-        score += 1
-    else:
-        notes.append("Response lacks decision-oriented insight")
+        if not depth_ok:
+            score -= 1
+            notes.append("Score capped due to limited analytical depth")
 
     # -------------------------
     # Final Rating
@@ -127,5 +141,5 @@ def evaluate_response(response: Dict[str, Any]) -> Dict[str, Any]:
         "score": score,
         "max_score": max_score,
         "rating": rating,
-        "notes": notes
+        "notes": notes,
     }

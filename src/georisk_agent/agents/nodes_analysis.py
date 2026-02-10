@@ -1,12 +1,15 @@
 from typing import List, Dict, Any
+import re
 
 from langchain_openai import ChatOpenAI
-
 from georisk_agent.app.config import settings
 from georisk_agent.app.types import AgentState
 
 
-# LLM for analysis (low temperature for consistency)
+# -------------------------
+# LLM configuration
+# -------------------------
+
 llm = ChatOpenAI(
     model=settings.model_name,
     api_key=settings.openai_api_key,
@@ -14,60 +17,99 @@ llm = ChatOpenAI(
 )
 
 
-# 🔥 Institutional Output Rules
+# -------------------------
+# Institutional guidance
+# -------------------------
+
 MARKET_INSIGHT_RULES = """
 Provide concrete market intelligence suitable for institutional investors.
 
-Always reference specific asset classes when relevant, such as:
-- equities (regional or sector-specific)
-- oil benchmarks (Brent, WTI)
-- gold
-- sovereign bonds
-- currencies
-- defense stocks
-- shipping firms
-- commodities
-
+Always reference specific asset classes when relevant.
 Avoid vague phrases like "markets may react".
 
-Instead explain:
-- which assets are likely to move first
+Explain clearly:
+- which assets move first
 - transmission mechanisms
 - plausible timelines
+
+Confidence rules:
+- HIGH only if evidence is strong, consistent, or historically validated
+- MEDIUM if evidence is mixed or partially uncertain
+- LOW if evidence is thin, speculative, or indirect
+
+Confidence must vary meaningfully based on evidence strength.
+Avoid defaulting to "Medium".
 """
 
 
-def _format_evidence(retrieved_chunks: List[Dict[str, Any]], max_items: int = 10) -> str:
+# -------------------------
+# Helpers
+# -------------------------
+
+def _format_evidence(
+    retrieved_chunks: List[Dict[str, Any]],
+    max_items: int = 10,
+) -> str:
     """
-    Create a compact, numbered evidence context for the analysis agent.
+    Compact evidence block for LLM context.
     """
     lines = []
+
     for i, c in enumerate(retrieved_chunks[:max_items], 1):
-        q = (c.get("question") or "").strip()
-        src = (c.get("source") or "local_corpus").strip()
-        txt = (c.get("text") or "").strip().replace("\n", " ")
+        txt = (c.get("text") or "").replace("\n", " ")
+        txt = txt[:240] + "..." if len(txt) > 240 else txt
+        lines.append(f"[{i}] {txt}")
 
-        if len(txt) > 240:
-            txt = txt[:240] + "..."
-
-        lines.append(
-            f"[{i}] source={src} | question={q}\n"
-            f"    snippet={txt}"
-        )
     return "\n".join(lines)
 
 
+def extract_section(text: str, section_name: str) -> str:
+    """
+    Extract content between SECTION_NAME: and the next ALL_CAPS header.
+    """
+    pattern = rf"{section_name}:(.*?)(\n[A-Z_]+:|\Z)"
+    match = re.search(pattern, text, re.DOTALL)
+    return match.group(1).strip() if match else ""
+
+
+def bullets_from_section(section: str) -> List[str]:
+    """
+    Convert a section block into clean bullet-like lines.
+    """
+    if not section:
+        return []
+
+    items = []
+    for line in section.splitlines():
+        s = line.strip("- ").strip()
+        if len(s) > 10:
+            items.append(s)
+
+    return items
+
+
+def extract_confidence(text: str) -> str:
+    """
+    Extract confidence level from output.
+    """
+    match = re.search(r"CONFIDENCE:\s*(Low|Medium|High)", text, re.I)
+    return match.group(1).capitalize() if match else "Medium"
+
+
+# -------------------------
+# Analysis Node
+# -------------------------
+
 def analysis_node(state: AgentState) -> AgentState:
     """
-    Market Impact Analysis Agent (final, evidence-grounded, scenario-aware)
+    Evidence-grounded, scenario-aware market impact analysis.
     """
 
     query = state.get("query", "")
-    plan: List[str] = state.get("plan", [])
-    retrieved_chunks: List[Dict[str, Any]] = state.get("retrieved_chunks", [])
+    plan = state.get("plan", [])
+    retrieved_chunks = state.get("retrieved_chunks", [])
 
     evidence_block = _format_evidence(retrieved_chunks, max_items=12)
-    max_citation = min(len(retrieved_chunks), 12)
 
     prompt = f"""
 You are a senior geopolitical risk analyst advising institutional investors.
@@ -80,111 +122,62 @@ User question:
 Planner sub-questions:
 - """ + "\n- ".join(plan) + f"""
 
-Evidence (source-grounded snippets):
+Evidence:
 {evidence_block}
 
-Task:
-Produce an evidence-grounded market impact analysis.
-
-Rules:
-- Be neutral and analytical.
-- Do NOT give investment advice (no "buy/sell", no price targets).
-- MARKET_IMPACTS must be directly supported by the evidence.
-- RISKS should be framed as potential or scenario-based.
-- Use citations ONLY in the form [n] where n refers to an evidence item shown above.
-- Do not use citation numbers higher than [{max_citation}].
-- If evidence is thin, explicitly say so.
-
 IMPORTANT:
-Each MARKET_IMPACT bullet must reference at least one concrete asset or financial instrument.
+You MUST follow the structure below.
+If a section is missing, the response is INVALID.
 
-Return EXACTLY this format:
+Return EXACTLY:
 
 MARKET_IMPACTS:
-- <mechanism → asset → effect [citations]>
+- ...
 
 RISKS:
-- <scenario-based risk [citations]>
+- ...
 
 SCENARIOS:
-- Base case: <most likely outcome>
-- Escalation case: <higher-impact but plausible outcome>
+Base case: ...
+Escalation case: ...
 
 INVESTOR_TAKEAWAY:
-- <one clear, decision-oriented insight>
+- ...
 
-CONFIDENCE: <Low|Medium|High>
+CONFIDENCE: Low | Medium | High
 
 SOURCES:
-- [1] <source identifier>
-
-Notes:
-- 3–6 bullets per section (where applicable).
-- Keep bullets specific and non-redundant.
+- ...
 """
 
     resp = llm.invoke(prompt)
     text = (resp.content or "").strip()
 
     # -------------------------
-    # Parse structured sections
+    # Robust parsing
     # -------------------------
 
-    market_impacts: List[str] = []
-    risks: List[str] = []
-    scenarios: List[str] = []
-    investor_takeaway: List[str] = []
-    sources: List[str] = []
-    confidence = "Medium"
+    market_impacts = bullets_from_section(
+        extract_section(text, "MARKET_IMPACTS")
+    )
 
-    current = None
+    risks = bullets_from_section(
+        extract_section(text, "RISKS")
+    )
 
-    for line in text.splitlines():
-        s = line.strip()
-        if not s:
-            continue
+    scenarios = bullets_from_section(
+        extract_section(text, "SCENARIOS")
+    )
 
-        upper = s.upper()
+    investor_takeaway = bullets_from_section(
+        extract_section(text, "INVESTOR_TAKEAWAY")
+    )
 
-        if upper.startswith("MARKET_IMPACTS"):
-            current = "market"
-            continue
-        if upper.startswith("RISKS"):
-            current = "risks"
-            continue
-        if upper.startswith("SCENARIOS"):
-            current = "scenarios"
-            continue
-        if upper.startswith("INVESTOR_TAKEAWAY"):
-            current = "takeaway"
-            continue
-        if upper.startswith("SOURCES"):
-            current = "sources"
-            continue
-        if upper.startswith("CONFIDENCE"):
-            parts = s.split(":", 1)
-            if len(parts) == 2:
-                conf = parts[1].strip().capitalize()
-                if conf in {"Low", "Medium", "High"}:
-                    confidence = conf
-            current = None
-            continue
+    sources = bullets_from_section(
+        extract_section(text, "SOURCES")
+    )
 
-        if s.startswith("-"):
-            item = s.lstrip("-").strip()
-            if not item:
-                continue
-
-            if current == "market":
-                market_impacts.append(item)
-            elif current == "risks":
-                risks.append(item)
-            elif current == "scenarios":
-                scenarios.append(item)
-            elif current == "takeaway":
-                investor_takeaway.append(item)
-            elif current == "sources":
-                sources.append(item)
+    confidence = extract_confidence(text)
 
     # -------------------------
     # Defensive fallbacks
@@ -192,31 +185,35 @@ Notes:
 
     if not market_impacts:
         market_impacts = [
-            "Available evidence was insufficient to derive clear market impacts."
+            "Evidence was insufficient to derive specific market impacts."
         ]
 
     if not risks:
         risks = [
-            "Downside risks could not be clearly derived from the current evidence base."
+            "Downside geopolitical risks remain plausible but insufficiently evidenced."
         ]
 
-    if not scenarios:
+    if len(scenarios) < 2:
         scenarios = [
-            "Base case: Gradual deterioration without immediate market dislocation.",
-            "Escalation case: Rapid geopolitical shock with spillover into global markets.",
+            "Base case: Conditions evolve without triggering systemic repricing.",
+            "Escalation case: A geopolitical shock drives rapid global risk-off behavior.",
         ]
 
     if not investor_takeaway:
         investor_takeaway = [
-            "Investors may want to monitor escalation indicators and exposure to affected assets."
+            "Investors should monitor escalation indicators and cross-asset volatility."
         ]
+
+    # -------------------------
+    # Return updated state
+    # -------------------------
 
     return {
         **state,
-        "market_impacts": market_impacts[:8],
-        "risks": risks[:8],
-        "scenarios": scenarios[:4],
-        "investor_takeaway": investor_takeaway[:2],
+        "market_impacts": market_impacts[:6],
+        "risks": risks[:6],
+        "scenarios": scenarios[:2],
+        "investor_takeaway": investor_takeaway[:1],
         "confidence": confidence,
         "sources": sources,
         "debug": {

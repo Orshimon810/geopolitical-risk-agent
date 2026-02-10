@@ -67,7 +67,6 @@ def signals_node(state: AgentState) -> AgentState:
     Determines relevant countries from the query and planner output,
     then fetches macroeconomic indicators only for those countries.
     """
-
     query = state.get("query", "")
     plan = " ".join(state.get("plan", []))
 

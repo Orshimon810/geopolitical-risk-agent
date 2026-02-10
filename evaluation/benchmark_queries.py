@@ -1,4 +1,9 @@
 BENCHMARK_QUERIES = [
+
+    # -----------------------------
+    # Core capability tests
+    # -----------------------------
+
     {
         "query": "What geopolitical scenario is most likely to trigger a global risk-off event within the next 12 months?",
         "focus": "scenario_generation"
@@ -19,4 +24,24 @@ BENCHMARK_QUERIES = [
         "query": "Construct a plausible but underpriced geopolitical risk and explain why markets may be misaligned.",
         "focus": "second_order_reasoning"
     },
+
+    # -----------------------------
+    # 🔥 Senior-level stress tests
+    # -----------------------------
+
+    {
+        "query": "Is the market currently underpricing any geopolitical risk?",
+        "focus": "ambiguity_handling"
+    },
+
+    {
+        "query": "Could a political shift in a mid-sized emerging economy trigger contagion across global credit markets?",
+        "focus": "thin_evidence_calibration"
+    },
+
+    {
+        "query": "Why is a military conflict in Antarctica likely within the next decade?",
+        "focus": "false_premise_detection"
+    },
+
 ]

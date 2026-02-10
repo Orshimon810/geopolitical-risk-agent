@@ -1,4 +1,4 @@
-from typing import TypedDict, List, Optional, Dict, Any
+from typing import TypedDict, List, Dict, Any
 
 
 class Evidence(TypedDict):
@@ -15,31 +15,48 @@ class AgentState(TypedDict, total=False):
     """
     Shared state passed between LangGraph nodes (agents).
 
-    total=False means:
-    - Keys are optional
-    - Each agent can add fields progressively
+    IMPORTANT:
+    Every field produced by any node MUST be declared here.
+    Undeclared fields will be silently dropped by LangGraph.
     """
 
+    # --------------------
     # User input
+    # --------------------
     query: str
 
+    # --------------------
     # Planner output
+    # --------------------
     plan: List[str]
 
-    # Research phase
+    # --------------------
+    # Research / RAG phase
+    # --------------------
     evidence: List[Evidence]
     retrieved_chunks: List[Dict[str, Any]]
-    
-    # Signals
+
+    # --------------------
+    # External signals
+    # --------------------
     signals: Dict[str, Any]
 
-    # Analysis phases
+    # --------------------
+    # Analysis outputs
+    # --------------------
     market_impacts: List[str]
     risks: List[str]
+    scenarios: List[str]
+    investor_takeaway: List[str]
     confidence: str
+    sources: List[str]
 
-    # Final output
+    # --------------------
+    # Optional structured report
+    # --------------------
     report: Dict[str, Any]
 
-    # Optional debug / tracing
+    # --------------------
+    # Debug / tracing
+    # --------------------
     debug: Dict[str, Any]

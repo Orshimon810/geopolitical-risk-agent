@@ -10,7 +10,7 @@ from georisk_agent.agents.nodes_signals import signals_node
 def build_graph():
     """
     Full Agentic workflow:
-    Planner -> RAG Research -> Analysis -> External Signals
+    Planner -> Retrieval -> External Signals -> Intelligence Analysis
     """
 
     graph = StateGraph(AgentState)
@@ -22,8 +22,8 @@ def build_graph():
 
     graph.set_entry_point("planner")
     graph.add_edge("planner", "rag_research")
-    graph.add_edge("rag_research", "analysis")
-    graph.add_edge("analysis", "signals")
-    graph.add_edge("signals", END)
+    graph.add_edge("rag_research", "signals")   
+    graph.add_edge("signals", "analysis")       
+    graph.add_edge("analysis", END)
 
     return graph.compile()
