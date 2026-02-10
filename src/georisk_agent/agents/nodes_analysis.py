@@ -33,11 +33,13 @@ Explain clearly:
 - plausible timelines
 
 Confidence rules:
-- HIGH only if evidence is strong, consistent, or historically validated
-- MEDIUM if evidence is mixed or partially uncertain
+- HIGH only if evidence is strong, consistent, historically validated,
+  AND timing and policy responses are well constrained
+- MEDIUM if evidence is directionally clear but timing, scale,
+  or political responses remain uncertain
 - LOW if evidence is thin, speculative, or indirect
 
-Confidence must vary meaningfully based on evidence strength.
+High confidence should be rare in geopolitical analysis.
 Avoid defaulting to "Medium".
 """
 
@@ -129,6 +131,20 @@ IMPORTANT:
 You MUST follow the structure below.
 If a section is missing, the response is INVALID.
 
+Structural rules:
+- Do NOT introduce risks inside MARKET_IMPACTS.
+- All risks must appear ONLY under RISKS.
+- RISKS must reflect market mispricing or incorrect assumptions,
+  NOT scenario outcomes.
+- SCENARIOS must describe evolution paths and timing,
+  NOT introduce new risks.
+
+Additional quality requirements:
+- In MARKET_IMPACTS, explicitly state which region or asset class
+  is most affected and which is relatively more resilient.
+- In SCENARIOS, note any timing mismatch between market reactions
+  and real economic impacts.
+
 Return EXACTLY:
 
 MARKET_IMPACTS:
@@ -190,7 +206,7 @@ SOURCES:
 
     if not risks:
         risks = [
-            "Downside geopolitical risks remain plausible but insufficiently evidenced."
+            "Markets may be mispricing geopolitical escalation risks due to overreliance on historical containment assumptions."
         ]
 
     if len(scenarios) < 2:
@@ -211,7 +227,7 @@ SOURCES:
     return {
         **state,
         "market_impacts": market_impacts[:6],
-        "risks": risks[:6],
+        "risks": risks[:4],
         "scenarios": scenarios[:2],
         "investor_takeaway": investor_takeaway[:1],
         "confidence": confidence,
