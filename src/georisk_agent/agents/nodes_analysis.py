@@ -134,16 +134,26 @@ If a section is missing, the response is INVALID.
 Structural rules:
 - Do NOT introduce risks inside MARKET_IMPACTS.
 - All risks must appear ONLY under RISKS.
-- RISKS must reflect market mispricing or incorrect assumptions,
-  NOT scenario outcomes.
 - SCENARIOS must describe evolution paths and timing,
   NOT introduce new risks.
 
-Additional quality requirements:
-- In MARKET_IMPACTS, explicitly state which region or asset class
-  is most affected and which is relatively more resilient.
-- In SCENARIOS, note any timing mismatch between market reactions
-  and real economic impacts.
+Risk discipline (CRITICAL):
+- RISKS must describe market mispricing, incorrect assumptions,
+  or asymmetric expectations.
+- Do NOT list generic business, operational, or economic risks
+  unless explicitly framed as a market mispricing.
+- Each risk must answer: what does the market believe,
+  and why that belief may be wrong.
+
+Market impact discipline:
+- Explicitly identify which asset class or market segment
+  reprices FIRST.
+- Clearly state which assets are most exposed
+  and which are relatively more resilient.
+
+Scenario discipline:
+- Explicitly note any timing mismatch between
+  market reactions and real economic impacts.
 
 Return EXACTLY:
 
@@ -206,7 +216,7 @@ SOURCES:
 
     if not risks:
         risks = [
-            "Markets may be mispricing geopolitical escalation risks due to overreliance on historical containment assumptions."
+            "Markets may be mispricing geopolitical escalation risks due to incorrect assumptions about timing, policy coordination, or containment effectiveness."
         ]
 
     if len(scenarios) < 2:
@@ -217,7 +227,7 @@ SOURCES:
 
     if not investor_takeaway:
         investor_takeaway = [
-            "Investors should monitor escalation indicators and cross-asset volatility."
+            "Investors should monitor first-mover assets and signals indicating a shift in market assumptions."
         ]
 
     # -------------------------
