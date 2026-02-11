@@ -1,0 +1,26 @@
+# Virtual environment
+.venv
+
+# Python cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+
+# Environment files
+.env
+
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+
+# Local vector DB / cache
+.chroma
+
+# Local data / assets
+data
+assets
