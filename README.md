@@ -106,6 +106,10 @@ Each response is scored on a **0–10 scale** using production-oriented heuristi
 
 Perfect scores are intentionally rare — the evaluator caps inflated ratings when analytical depth is limited.
 
+### Run evaluation
+```bash
+python evaluate/run_eval.py
+```
 ---
 
 ### Adversarial Benchmarking
@@ -120,13 +124,7 @@ This helps ensure the agent behaves more like an institutional risk analyst than
 
 ---
 
-### Run evaluation
-```bash
-python evaluate/run_eval.py
-```
----
-
-## 🖥️ Interfaces
+## 🛠 Local Development
 
 ### Streamlit UI
 
@@ -138,6 +136,40 @@ streamlit run ui/app.py
 ```bash
 python scripts/run_planner.py
 ```
+---
+
+## 🚀 Deployment
+### 🐳 Docker
+
+build:
+```bash
+docker build -t geo-risk-agent .
+```
+
+Run:
+```bash
+docker run -p 8501:8501 geo-risk-agent
+```
+
+The app runs via a lightweight Python 3.11 container and exposes the Streamlit interface.
+
+
+### 🌍 Cloud Deployment (Render)
+
+The Docker image was pushed to DockerHub and deployed publicly using Render.
+
+Deployment flow:
+
+Build Docker image
+
+Push to DockerHub
+
+Render pulls the image
+
+Environment variables configured securely (e.g., OPENAI_API_KEY)
+
+Public URL generated
+
 ---
 ## 📊 Example Analyses
 
