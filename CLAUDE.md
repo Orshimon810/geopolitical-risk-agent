@@ -43,14 +43,11 @@ The core is a **linear LangGraph state machine** (`src/georisk_agent/agents/grap
 
 All nodes share an `AgentState` TypedDict (`src/georisk_agent/app/types.py`) that flows through the graph.
 
-**Note:** `nodes_research.py` (GDELT web search) exists but is **not wired into the active graph** — it's a leftover from an earlier iteration.
-
 ## Key Files
 
 - `src/georisk_agent/app/config.py` — Pydantic `Settings` class reading from `.env`
 - `src/georisk_agent/rag/vector_store.py` — ChromaDB persistent client setup with OpenAI embeddings
 - `src/georisk_agent/rag/retriever.py` — `retrieve(query, k)` wrapper over Chroma
-- `src/georisk_agent/tools/web_search.py` — GDELT API search (unused in current graph)
 - `ui/app.py` — Streamlit single-page UI
 - `evaluation/benchmark_queries.py` — 5 core + 3 adversarial test queries
 
