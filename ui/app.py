@@ -73,7 +73,7 @@ if run_button and query.strip():
     # ---------------------------------------------------------------
     confidence = result.get("confidence")
     if confidence:
-        color = {"Low": "🟢", "Medium": "🟡", "High": "🔴"}.get(confidence, "")
+        color = {"Low": "🔴", "Medium": "🟡", "High": "🟢"}.get(confidence, "")
         st.subheader("🎯 Confidence")
         st.markdown(f"**{color} {confidence}**")
 

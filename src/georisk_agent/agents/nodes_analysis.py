@@ -110,8 +110,19 @@ def analysis_node(state: AgentState) -> AgentState:
     query = state.get("query", "")
     plan = state.get("plan", [])
     retrieved_chunks = state.get("retrieved_chunks", [])
+    signals = state.get("signals", {})
 
     evidence_block = _format_evidence(retrieved_chunks, max_items=12)
+
+    signals_block = ""
+    countries = signals.get("countries", {})
+    if countries:
+        lines = []
+        for iso, data in countries.items():
+            if data.get("status") == "ok":
+                lines.append(f"- {iso}: Trade = {data['value']:.1f}% of GDP ({data['year']})")
+        if lines:
+            signals_block = "Macroeconomic Signals (World Bank):\n" + "\n".join(lines)
 
     prompt = f"""
 You are a senior geopolitical risk analyst advising institutional investors.
@@ -126,6 +137,8 @@ Planner sub-questions:
 
 Evidence:
 {evidence_block}
+
+{signals_block}
 
 IMPORTANT:
 You MUST follow the structure below.

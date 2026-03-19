@@ -81,12 +81,12 @@ def ingest_directory(dir_path: str):
 
         BATCH_SIZE = 64
 
-    for i in range(0, len(chunks), BATCH_SIZE):
-        collection.add(
-        documents=chunks[i:i + BATCH_SIZE],
-        metadatas=metadatas[i:i + BATCH_SIZE],
-        ids=ids[i:i + BATCH_SIZE],
-        )
+        for i in range(0, len(chunks), BATCH_SIZE):
+            collection.add(
+                documents=chunks[i:i + BATCH_SIZE],
+                metadatas=metadatas[i:i + BATCH_SIZE],
+                ids=ids[i:i + BATCH_SIZE],
+            )
 
         print(f"Ingested {len(chunks)} chunks from {file_path.name}")
 
