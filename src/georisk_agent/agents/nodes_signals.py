@@ -52,6 +52,16 @@ COUNTRY_NAME_TO_ISO = {
 }
 
 
+REGION_TO_ISOS = {
+    "middle east": ["SAU", "IRN", "IRQ", "ARE", "QAT"],
+    "gulf": ["SAU", "ARE", "QAT", "KWT", "BHR", "OMN"],
+    "opec": ["SAU", "IRN", "IRQ", "ARE", "KWT", "NGA", "VEN"],
+    "eastern europe": ["UKR", "RUS", "POL"],
+    "southeast asia": ["IDN", "MYS", "THA", "VNM"],
+    "latin america": ["BRA", "MEX", "VEN", "COL"],
+    "africa": ["NGA", "ZAF", "EGY"],
+}
+
 WORLD_BANK_API = "https://api.worldbank.org/v2/country/{country}/indicator/{indicator}?format=json"
 
 # Countries where oil rents are a meaningful signal
@@ -128,8 +138,8 @@ def signals_node(state: AgentState) -> AgentState:
 
 def extract_relevant_countries(text: str) -> list[str]:
     """
-    Naive country extraction based on keyword matching.
-    Suitable for controlled signals enrichment.
+    Country extraction based on keyword matching.
+    Handles both individual country names and region keywords.
     """
     text = text.lower()
     found = set()
@@ -137,6 +147,10 @@ def extract_relevant_countries(text: str) -> list[str]:
     for name, iso in COUNTRY_NAME_TO_ISO.items():
         if name in text:
             found.add(iso)
+
+    for region, isos in REGION_TO_ISOS.items():
+        if region in text:
+            found.update(isos)
 
     return list(found)
 
