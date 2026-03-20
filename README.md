@@ -47,13 +47,17 @@ flowchart TD
 - Produces structured outputs:
   - `MARKET_IMPACTS`
   - `RISKS`
+  - `SCENARIOS` (base case + escalation with timelines)
+  - `INVESTOR_TAKEAWAY`
   - `CONFIDENCE`
 - Enforces strict citation and formatting guardrails
 
 ### External Signals Agent
-- Extracts relevant countries from the query context
-- Fetches macroeconomic indicators (e.g., Trade % of GDP)
-  via the **World Bank Public API**
+- Extracts relevant countries from the query context, including region keywords (e.g., "Middle East", "Gulf", "OPEC")
+- Covers 43 countries including full Middle East coverage (SAU, IRN, IRQ, ARE, QAT, etc.)
+- Fetches two indicators per country via the **World Bank Public API**:
+  - **Trade (% of GDP)** — all detected countries
+  - **Oil Rents (% of GDP)** — oil-producing countries only
 - Adds contextual signals without influencing core reasoning
 
 ---
