@@ -69,6 +69,24 @@ if run_button and query.strip():
                 st.markdown(f"- {r}")
 
     # ---------------------------------------------------------------
+    # Scenarios
+    # ---------------------------------------------------------------
+    scenarios = result.get("scenarios", [])
+    if scenarios:
+        with st.expander("🔮 Scenarios", expanded=True):
+            for s in scenarios:
+                st.markdown(f"- {s}")
+
+    # ---------------------------------------------------------------
+    # Investor Takeaway
+    # ---------------------------------------------------------------
+    investor_takeaway = result.get("investor_takeaway", [])
+    if investor_takeaway:
+        with st.expander("💡 Investor Takeaway", expanded=True):
+            for t in investor_takeaway:
+                st.markdown(f"- {t}")
+
+    # ---------------------------------------------------------------
     # Confidence
     # ---------------------------------------------------------------
     confidence = result.get("confidence")
@@ -86,12 +104,15 @@ if run_button and query.strip():
     if countries:
         st.subheader("🌐 External Signals (World Bank)")
         for iso, data in countries.items():
-            if data.get("status") == "ok":
-                value = data.get("value")
-                year = data.get("year")
-                st.markdown(
-                    f"**{iso}** — Trade: **{value:.1f}% of GDP** ({year})"
-                )
+            parts = []
+            trade = data.get("trade_gdp", {})
+            if trade.get("status") == "ok":
+                parts.append(f"Trade: **{trade['value']:.1f}% of GDP** ({trade['year']})")
+            oil = data.get("oil_rents", {})
+            if oil.get("status") == "ok":
+                parts.append(f"Oil Rents: **{oil['value']:.1f}% of GDP** ({oil['year']})")
+            if parts:
+                st.markdown(f"**{iso}** — {', '.join(parts)}")
             else:
                 st.markdown(f"**{iso}** — No recent data available")
 

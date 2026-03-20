@@ -119,8 +119,15 @@ def analysis_node(state: AgentState) -> AgentState:
     if countries:
         lines = []
         for iso, data in countries.items():
-            if data.get("status") == "ok":
-                lines.append(f"- {iso}: Trade = {data['value']:.1f}% of GDP ({data['year']})")
+            parts = []
+            trade = data.get("trade_gdp", {})
+            if trade.get("status") == "ok":
+                parts.append(f"Trade = {trade['value']:.1f}% of GDP ({trade['year']})")
+            oil = data.get("oil_rents", {})
+            if oil.get("status") == "ok":
+                parts.append(f"Oil Rents = {oil['value']:.1f}% of GDP ({oil['year']})")
+            if parts:
+                lines.append(f"- {iso}: {', '.join(parts)}")
         if lines:
             signals_block = "Macroeconomic Signals (World Bank):\n" + "\n".join(lines)
 

@@ -4,6 +4,7 @@ from typing import Dict, Any
 from georisk_agent.app.types import AgentState
 
 COUNTRY_NAME_TO_ISO = {
+    # Major economies
     "united states": "USA",
     "us": "USA",
     "usa": "USA",
@@ -17,22 +18,51 @@ COUNTRY_NAME_TO_ISO = {
     "france": "FRA",
     "united kingdom": "GBR",
     "uk": "GBR",
+    "brazil": "BRA",
+    "canada": "CAN",
+    "australia": "AUS",
+    "italy": "ITA",
+    "mexico": "MEX",
+    "indonesia": "IDN",
+    "turkey": "TUR",
+    "turkiye": "TUR",
+    # Middle East
+    "saudi arabia": "SAU",
+    "iran": "IRN",
+    "iraq": "IRQ",
+    "israel": "ISR",
+    "uae": "ARE",
+    "united arab emirates": "ARE",
+    "qatar": "QAT",
+    "kuwait": "KWT",
+    "bahrain": "BHR",
+    "oman": "OMN",
+    "jordan": "JOR",
+    "lebanon": "LBN",
+    "yemen": "YEM",
+    "syria": "SYR",
+    # Africa & other
+    "egypt": "EGY",
+    "nigeria": "NGA",
+    "south africa": "ZAF",
+    "venezuela": "VEN",
+    "ukraine": "UKR",
+    "pakistan": "PAK",
+    "taiwan": "TWN",
 }
 
 
 WORLD_BANK_API = "https://api.worldbank.org/v2/country/{country}/indicator/{indicator}?format=json"
 
+# Countries where oil rents are a meaningful signal
+OIL_PRODUCER_ISOS = {
+    "SAU", "IRN", "IRQ", "ARE", "QAT", "KWT", "BHR", "OMN",
+    "RUS", "NGA", "VEN", "NOR", "LBY", "DZA", "KAZ",
+}
 
-def fetch_trade_gdp(country: str = "USA") -> Dict[str, Any]:
-    """
-    Fetch Trade (% of GDP) from World Bank API.
-    Indicator: NE.TRD.GNFS.ZS
-    """
-    url = WORLD_BANK_API.format(
-        country=country,
-        indicator="NE.TRD.GNFS.ZS",
-    )
 
+def _fetch_indicator(country: str, indicator: str) -> Dict[str, Any]:
+    url = WORLD_BANK_API.format(country=country, indicator=indicator)
     try:
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
@@ -53,11 +83,15 @@ def fetch_trade_gdp(country: str = "USA") -> Dict[str, Any]:
         }
 
     except Exception as e:
-        return {
-            "status": "error",
-            "error": str(e),
-            "source": "World Bank",
-        }
+        return {"status": "error", "error": str(e), "source": "World Bank"}
+
+
+def fetch_trade_gdp(country: str) -> Dict[str, Any]:
+    return _fetch_indicator(country, "NE.TRD.GNFS.ZS")
+
+
+def fetch_oil_rents(country: str) -> Dict[str, Any]:
+    return _fetch_indicator(country, "NY.GDP.PETR.RT.ZS")
 
 
 def signals_node(state: AgentState) -> AgentState:
@@ -66,6 +100,7 @@ def signals_node(state: AgentState) -> AgentState:
 
     Determines relevant countries from the query and planner output,
     then fetches macroeconomic indicators only for those countries.
+    Oil-producing countries also get Oil Rents (% of GDP).
     """
     query = state.get("query", "")
     plan = " ".join(state.get("plan", []))
@@ -74,24 +109,21 @@ def signals_node(state: AgentState) -> AgentState:
     countries = extract_relevant_countries(combined_text)
 
     signals = {
-        "indicator": "Trade (% of GDP)",
         "countries": {},
     }
 
     if not countries:
         signals["note"] = "No relevant countries detected from query."
-        return {
-            **state,
-            "signals": signals,
-        }
+        return {**state, "signals": signals}
 
     for iso in countries:
-        signals["countries"][iso] = fetch_trade_gdp(iso)
+        entry: Dict[str, Any] = {}
+        entry["trade_gdp"] = fetch_trade_gdp(iso)
+        if iso in OIL_PRODUCER_ISOS:
+            entry["oil_rents"] = fetch_oil_rents(iso)
+        signals["countries"][iso] = entry
 
-    return {
-        **state,
-        "signals": signals,
-    }
+    return {**state, "signals": signals}
 
 
 def extract_relevant_countries(text: str) -> list[str]:
