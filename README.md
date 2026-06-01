@@ -112,7 +112,7 @@ Perfect scores are intentionally rare — the evaluator caps inflated ratings wh
 
 ### Run evaluation
 ```bash
-python evaluate/run_eval.py
+python evaluation/run_eval.py
 ```
 ---
 

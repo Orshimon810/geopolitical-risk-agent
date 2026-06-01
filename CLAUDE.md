@@ -29,7 +29,11 @@ docker build -t georisk-agent .
 docker run -e OPENAI_API_KEY=sk-... -p 8501:8501 georisk-agent
 ```
 
-There is no active test suite — `pytest` is installed but `tests/` is empty. The evaluation suite in `evaluation/run_eval.py` serves as the functional benchmark (8 queries, 0-10 scoring).
+Run unit tests with:
+
+```bash
+pytest tests/ -v
+```
 
 ## Architecture
 
@@ -51,7 +55,7 @@ All nodes share an `AgentState` TypedDict (`src/georisk_agent/app/types.py`) tha
 - `ui/app.py` — Streamlit single-page UI with color-coded confidence and expandable sections
 - `evaluation/evaluator.py` — 0-10 rubric: market impacts (2-3 pts), risks (1-2 pts), signals (1 pt), scenarios (2 pts), takeaway (1 pt), confidence calibration (1 pt); caps at 9 if depth insufficient; penalizes HIGH confidence when score < 7
 - `evaluation/benchmark_queries.py` — 5 core queries + 3 adversarial (ambiguity, thin evidence, false premise)
-- `scripts/debug_ddg.py` — Standalone GDELT API explorer, not integrated into the pipeline
+- `scripts/explore_gdelt_api.py` — Standalone GDELT API explorer, not integrated into the pipeline
 
 ## Environment Variables
 

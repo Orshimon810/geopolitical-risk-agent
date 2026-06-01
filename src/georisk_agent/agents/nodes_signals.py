@@ -1,3 +1,4 @@
+import re
 import requests
 from typing import Dict, Any
 
@@ -145,11 +146,11 @@ def extract_relevant_countries(text: str) -> list[str]:
     found = set()
 
     for name, iso in COUNTRY_NAME_TO_ISO.items():
-        if name in text:
+        if re.search(r'\b' + re.escape(name) + r'\b', text):
             found.add(iso)
 
     for region, isos in REGION_TO_ISOS.items():
-        if region in text:
+        if re.search(r'\b' + re.escape(region) + r'\b', text):
             found.update(isos)
 
     return list(found)
