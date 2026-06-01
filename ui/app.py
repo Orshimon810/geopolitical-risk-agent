@@ -1,6 +1,8 @@
+import datetime
 import streamlit as st
 
 from georisk_agent.agents.graph import build_graph
+from georisk_agent.app.config import settings
 
 
 # -------------------------------------------------------------------
@@ -11,10 +13,45 @@ st.set_page_config(
     layout="wide",
 )
 
+# -------------------------------------------------------------------
+# Rate-limit state
+# -------------------------------------------------------------------
+SESSION_LIMIT = settings.session_query_limit
+DAILY_LIMIT = settings.daily_query_limit
+
+
+@st.cache_resource
+def get_budget() -> dict:
+    """Shared counter across all sessions within this server process."""
+    return {"date": None, "count": 0}
+
+
+def _reset_budget_if_new_day(budget: dict) -> None:
+    today = datetime.date.today().isoformat()
+    if budget["date"] != today:
+        budget["date"] = today
+        budget["count"] = 0
+
+
+budget = get_budget()
+_reset_budget_if_new_day(budget)
+
+if "session_queries" not in st.session_state:
+    st.session_state["session_queries"] = 0
+
+# -------------------------------------------------------------------
+# Page header
+# -------------------------------------------------------------------
 st.title("🌍 Geopolitical Risk & Markets Agent")
 st.markdown(
     "Analyze geopolitical risks and market impacts using an **agentic RAG system** "
     "with external macroeconomic signals."
+)
+
+session_used = st.session_state["session_queries"]
+st.caption(
+    f"Session: {session_used}/{SESSION_LIMIT} queries used  |  "
+    f"Daily: {budget['count']}/{DAILY_LIMIT} queries used"
 )
 
 # -------------------------------------------------------------------
@@ -35,9 +72,26 @@ run_button = st.button("Run Analysis")
 # Run analysis
 # -------------------------------------------------------------------
 if run_button and query.strip():
+    if st.session_state["session_queries"] >= SESSION_LIMIT:
+        st.warning(
+            f"You have reached the session limit of {SESSION_LIMIT} queries. "
+            "Refresh the page to start a new session."
+        )
+        st.stop()
+
+    if budget["count"] >= DAILY_LIMIT:
+        st.warning(
+            f"The daily limit of {DAILY_LIMIT} queries has been reached. "
+            "Please come back tomorrow."
+        )
+        st.stop()
+
     with st.spinner("Running analysis..."):
         app = build_graph()
         result = app.invoke({"query": query})
+
+    st.session_state["session_queries"] += 1
+    budget["count"] += 1
 
     st.success("Analysis complete")
 
