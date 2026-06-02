@@ -1,60 +1,55 @@
-from georisk_agent.agents.nodes_analysis import (
-    extract_section,
-    bullets_from_section,
-    extract_confidence,
-)
+import pytest
+from pydantic import ValidationError
 
-SAMPLE_OUTPUT = """\
-MARKET_IMPACTS:
-- Oil prices surge 15-20% on supply disruption
-- Energy equities reprice before broader indices
-
-RISKS:
-- Market underestimates escalation speed and containment failure
-
-SCENARIOS:
-Base case: Tensions stabilize within 3 months, limited spread.
-Escalation case: Full blockade triggers global risk-off repricing.
-
-INVESTOR_TAKEAWAY:
-- Reduce EM exposure, increase commodity hedges near-term
-
-CONFIDENCE: Medium
-
-SOURCES:
-- World Bank Trade Data 2023
-- IMF World Economic Outlook 2024
-"""
+from georisk_agent.agents.nodes_analysis import AnalysisOutput
 
 
-def test_extract_section_returns_correct_content():
-    section = extract_section(SAMPLE_OUTPUT, "MARKET_IMPACTS")
-    assert "Oil prices" in section
+VALID_OUTPUT = {
+    "market_impacts": ["Oil prices surge 15-20% on supply disruption"],
+    "risks": ["Market underestimates escalation speed and containment failure"],
+    "scenarios": [
+        "Base case: Tensions stabilize within 3 months, limited spread.",
+        "Escalation case: Full blockade triggers global risk-off repricing.",
+    ],
+    "investor_takeaway": ["Reduce EM exposure, increase commodity hedges near-term"],
+    "confidence": "Medium",
+    "sources": ["World Bank Trade Data 2023", "IMF World Economic Outlook 2024"],
+}
 
 
-def test_extract_section_missing_header_returns_empty():
-    assert extract_section(SAMPLE_OUTPUT, "NONEXISTENT") == ""
+def test_valid_construction():
+    output = AnalysisOutput(**VALID_OUTPUT)
+    assert output.confidence == "Medium"
+    assert len(output.scenarios) == 2
 
 
-def test_bullets_from_section_count():
-    section = extract_section(SAMPLE_OUTPUT, "MARKET_IMPACTS")
-    bullets = bullets_from_section(section)
-    assert len(bullets) == 2
+def test_confidence_accepts_all_valid_levels():
+    for level in ("Low", "Medium", "High"):
+        output = AnalysisOutput(**{**VALID_OUTPUT, "confidence": level})
+        assert output.confidence == level
 
 
-def test_bullets_from_section_content():
-    section = extract_section(SAMPLE_OUTPUT, "MARKET_IMPACTS")
-    bullets = bullets_from_section(section)
-    assert any("Oil prices" in b for b in bullets)
+def test_confidence_rejects_invalid_value():
+    with pytest.raises(ValidationError):
+        AnalysisOutput(**{**VALID_OUTPUT, "confidence": "Unknown"})
 
 
-def test_extract_confidence_medium():
-    assert extract_confidence(SAMPLE_OUTPUT) == "Medium"
+def test_sources_defaults_to_empty_list():
+    data = {k: v for k, v in VALID_OUTPUT.items() if k != "sources"}
+    output = AnalysisOutput(**data)
+    assert output.sources == []
 
 
-def test_extract_confidence_high():
-    assert extract_confidence("CONFIDENCE: High") == "High"
+def test_fields_are_lists_of_strings():
+    output = AnalysisOutput(**VALID_OUTPUT)
+    for field in ("market_impacts", "risks", "scenarios", "investor_takeaway", "sources"):
+        value = getattr(output, field)
+        assert isinstance(value, list)
+        assert all(isinstance(item, str) for item in value)
 
 
-def test_extract_confidence_defaults_to_medium():
-    assert extract_confidence("No confidence level stated here.") == "Medium"
+def test_model_dump_is_serializable():
+    output = AnalysisOutput(**VALID_OUTPUT)
+    dumped = output.model_dump()
+    assert dumped["confidence"] == "Medium"
+    assert isinstance(dumped["market_impacts"], list)
