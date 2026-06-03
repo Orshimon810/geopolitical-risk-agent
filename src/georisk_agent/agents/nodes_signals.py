@@ -1,5 +1,6 @@
 import re
 import requests
+import yfinance as yf
 from typing import Dict, Any
 
 from georisk_agent.app.types import AgentState
@@ -65,12 +66,71 @@ REGION_TO_ISOS = {
 
 WORLD_BANK_API = "https://api.worldbank.org/v2/country/{country}/indicator/{indicator}?format=json"
 
-# Countries where oil rents are a meaningful signal
 OIL_PRODUCER_ISOS = {
     "SAU", "IRN", "IRQ", "ARE", "QAT", "KWT", "BHR", "OMN",
     "RUS", "NGA", "VEN", "NOR", "LBY", "DZA", "KAZ",
 }
 
+# -------------------------
+# Market data config
+# -------------------------
+
+CORE_TICKERS: Dict[str, str] = {
+    "^VIX":     "VIX (Market Fear)",
+    "BZ=F":     "Brent Crude ($/bbl)",
+    "GC=F":     "Gold ($/oz)",
+    "DX-Y.NYB": "US Dollar Index",
+}
+
+COUNTRY_TICKERS: Dict[str, Dict[str, str]] = {
+    "SAU": {"NG=F": "Natural Gas ($/MMBtu)"},
+    "IRN": {"NG=F": "Natural Gas ($/MMBtu)"},
+    "IRQ": {"NG=F": "Natural Gas ($/MMBtu)"},
+    "ARE": {"NG=F": "Natural Gas ($/MMBtu)"},
+    "KWT": {"NG=F": "Natural Gas ($/MMBtu)"},
+    "RUS": {"NG=F": "Natural Gas ($/MMBtu)"},
+    "UKR": {"NG=F": "Natural Gas ($/MMBtu)"},
+    "CHN": {"FXI": "China Large-Cap ETF", "TSM": "TSMC"},
+    "TWN": {"FXI": "China Large-Cap ETF", "TSM": "TSMC"},
+    "BRA": {"EEM": "EM ETF"},
+    "IND": {"EEM": "EM ETF"},
+    "TUR": {"EEM": "EM ETF"},
+    "DEU": {"FEZ": "Euro Stoxx 50 ETF"},
+    "FRA": {"FEZ": "Euro Stoxx 50 ETF"},
+    "GBR": {"FEZ": "Euro Stoxx 50 ETF"},
+}
+
+
+def build_tickers(isos: list[str]) -> Dict[str, str]:
+    """Build the full ticker dict for detected countries, always including core tickers."""
+    tickers = dict(CORE_TICKERS)
+    for iso in isos:
+        tickers.update(COUNTRY_TICKERS.get(iso, {}))
+    return tickers
+
+
+def fetch_market_snapshot(tickers: Dict[str, str]) -> Dict[str, Any]:
+    results: Dict[str, Any] = {}
+    for symbol, label in tickers.items():
+        try:
+            info = yf.Ticker(symbol).fast_info
+            price = info.last_price
+            prev = info.previous_close
+            change_pct = ((price - prev) / prev * 100) if prev else None
+            results[symbol] = {
+                "label": label,
+                "price": round(price, 2),
+                "change_1d_pct": round(change_pct, 2) if change_pct is not None else None,
+                "status": "ok",
+            }
+        except Exception as e:
+            results[symbol] = {"label": label, "status": "error", "error": str(e)}
+    return results
+
+
+# -------------------------
+# World Bank helpers
+# -------------------------
 
 def _fetch_indicator(country: str, indicator: str) -> Dict[str, Any]:
     url = WORLD_BANK_API.format(country=country, indicator=indicator)
@@ -105,13 +165,16 @@ def fetch_oil_rents(country: str) -> Dict[str, Any]:
     return _fetch_indicator(country, "NY.GDP.PETR.RT.ZS")
 
 
+# -------------------------
+# Signals Node
+# -------------------------
+
 def signals_node(state: AgentState) -> AgentState:
     """
     Context-aware External Signals Agent.
 
-    Determines relevant countries from the query and planner output,
-    then fetches macroeconomic indicators only for those countries.
-    Oil-producing countries also get Oil Rents (% of GDP).
+    Detects relevant countries, fetches World Bank macro indicators,
+    and fetches live Yahoo Finance market prices (always core + query-specific).
     """
     query = state.get("query", "")
     plan = " ".join(state.get("plan", []))
@@ -119,20 +182,20 @@ def signals_node(state: AgentState) -> AgentState:
     combined_text = f"{query} {plan}"
     countries = extract_relevant_countries(combined_text)
 
-    signals = {
-        "countries": {},
-    }
+    signals: Dict[str, Any] = {"countries": {}}
 
     if not countries:
         signals["note"] = "No relevant countries detected from query."
-        return {**state, "signals": signals}
+    else:
+        for iso in countries:
+            entry: Dict[str, Any] = {}
+            entry["trade_gdp"] = fetch_trade_gdp(iso)
+            if iso in OIL_PRODUCER_ISOS:
+                entry["oil_rents"] = fetch_oil_rents(iso)
+            signals["countries"][iso] = entry
 
-    for iso in countries:
-        entry: Dict[str, Any] = {}
-        entry["trade_gdp"] = fetch_trade_gdp(iso)
-        if iso in OIL_PRODUCER_ISOS:
-            entry["oil_rents"] = fetch_oil_rents(iso)
-        signals["countries"][iso] = entry
+    tickers = build_tickers(countries)
+    signals["market_data"] = fetch_market_snapshot(tickers)
 
     return {**state, "signals": signals}
 
@@ -154,4 +217,3 @@ def extract_relevant_countries(text: str) -> list[str]:
             found.update(isos)
 
     return list(found)
-

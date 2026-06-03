@@ -170,6 +170,22 @@ if run_button and query.strip():
             else:
                 st.markdown(f"**{iso}** — No recent data available")
 
+    # ---------------------------------------------------------------
+    # Live Market Prices
+    # ---------------------------------------------------------------
+    market_data = signals.get("market_data", {})
+    ok_entries = {s: d for s, d in market_data.items() if d.get("status") == "ok"}
+    if ok_entries:
+        st.subheader("📈 Live Market Prices")
+        cols = st.columns(min(len(ok_entries), 4))
+        for i, (symbol, d) in enumerate(ok_entries.items()):
+            chg = d.get("change_1d_pct")
+            cols[i % 4].metric(
+                label=d["label"],
+                value=str(d["price"]),
+                delta=f"{chg:+.2f}%" if chg is not None else None,
+            )
+
 else:
     st.info("Enter a question and click **Run Analysis**.")
 

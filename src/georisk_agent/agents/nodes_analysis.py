@@ -122,6 +122,16 @@ def analysis_node(state: AgentState) -> AgentState:
         if lines:
             signals_block = "Macroeconomic Signals (World Bank):\n" + "\n".join(lines)
 
+    market_data = signals.get("market_data", {})
+    if market_data:
+        market_lines = []
+        for _, d in market_data.items():
+            if d.get("status") == "ok":
+                chg = f"{d['change_1d_pct']:+.1f}% (1d)" if d.get("change_1d_pct") is not None else ""
+                market_lines.append(f"- {d['label']}: {d['price']} {chg}")
+        if market_lines:
+            signals_block += "\n\nLive Market Prices:\n" + "\n".join(market_lines)
+
     prompt = f"""
 You are a senior geopolitical risk analyst advising institutional investors.
 
