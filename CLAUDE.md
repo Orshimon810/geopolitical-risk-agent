@@ -41,8 +41,8 @@ The core is a **linear LangGraph state machine** (`src/georisk_agent/agents/grap
 
 1. **Planner** (`nodes_planner.py`) — LLM decomposes query into 4-6 sub-questions (temperature=0.2)
 2. **RAG Research** (`nodes_rag_research.py`) — Retrieves k=3 chunks per sub-question from ChromaDB, deduplicates across the full run by `(source, text)` tuple
-3. **External Signals** (`nodes_signals.py`) — Extracts countries via keyword matching against a 43-country dict plus region aliases (Middle East, Gulf, OPEC, Eastern Europe, etc.), then fetches two World Bank indicators: Trade % of GDP (all detected countries) and Oil Rents % of GDP (oil-producing countries only)
-4. **Analysis** (`nodes_analysis.py`) — LLM synthesizes plan + evidence + signals into six ALL_CAPS-delimited sections: `MARKET_IMPACTS`, `RISKS`, `SCENARIOS`, `INVESTOR_TAKEAWAY`, `CONFIDENCE` (Low/Medium/High), `SOURCES`
+3. **External Signals** (`nodes_signals.py`) — Extracts countries via keyword matching against a 43-country dict plus region aliases (Middle East, Gulf, OPEC, Eastern Europe, etc.), then fetches: (a) World Bank indicators — Trade % of GDP (all detected countries) and Oil Rents % of GDP (oil-producing countries only); (b) live Yahoo Finance market prices — always VIX, Brent crude, Gold, DXY, plus query-specific tickers (e.g. FXI/TSM for China-Taiwan, NG=F for oil/Russia/Ukraine, EEM for EM, FEZ for Europe)
+4. **Analysis** (`nodes_analysis.py`) — LLM synthesizes plan + evidence + signals into a `AnalysisOutput` Pydantic model via LangChain `.with_structured_output()`, guaranteeing six typed fields: `market_impacts`, `risks`, `scenarios`, `investor_takeaway`, `confidence` (Literal["Low","Medium","High"]), `sources`
 
 All nodes share an `AgentState` TypedDict (`src/georisk_agent/app/types.py`) that flows through the graph. Each node is a pure function mapping `AgentState → AgentState`.
 
@@ -67,11 +67,14 @@ Set in `.env` (see `.env.example`):
 | `MODEL_NAME` | `gpt-4o-mini` | No |
 | `CHROMA_DIR` | `.chroma` | No |
 | `APP_ENV` | `dev` | No |
+| `SESSION_QUERY_LIMIT` | `5` | No |
+| `DAILY_QUERY_LIMIT` | `30` | No |
 
 ## Design Notes
 
 - If no documents are ingested (empty Chroma), the pipeline still runs — analysis falls back to pure LLM reasoning.
-- Structured output is parsed via regex on ALL_CAPS section headers, not LangChain structured output.
+- Analysis uses LangChain `.with_structured_output(AnalysisOutput)` — the LLM returns a validated Pydantic object, not free text. Parsing failures surface as exceptions rather than silent empty sections.
+- Market data ticker selection is deterministic: `build_tickers(isos)` always includes 4 core tickers and merges country-specific ones, deduplicating via `dict.update`.
 - RAG document ingestion chunks at 400 chars with 80-char overlap (max 1000 chars), batch size 64.
 - Docker image excludes `.chroma/` and `data/` — RAG DB must be rebuilt inside the container.
 - `fastapi`, `uvicorn`, `beautifulsoup4`, and `tiktoken` are installed as dependencies but are not used anywhere in the current codebase.

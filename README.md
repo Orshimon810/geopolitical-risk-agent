@@ -12,8 +12,8 @@ This project implements an end-to-end **agentic pipeline** that:
 
 - Decomposes complex geopolitical queries into structured research plans
 - Grounds analysis in a curated document corpus (RAG)
-- Enriches insights with **context-aware external macroeconomic signals**
-- Produces structured, evidence-backed market impact assessments
+- Enriches insights with **context-aware external macroeconomic signals** and **live market prices**
+- Produces structured, evidence-backed market impact assessments via a validated Pydantic schema
 
 The system is designed to resemble **internal research tools** used by risk, policy, and strategy teams.
 The system is orchestrated using a **LangGraph-based agent state machine**.
@@ -44,21 +44,28 @@ flowchart TD
 - Uses a curated corpus (e.g., IMF, World Bank, BIS reports)
 
 ### Analysis Agent
-- Produces structured outputs:
-  - `MARKET_IMPACTS`
-  - `RISKS`
-  - `SCENARIOS` (base case + escalation with timelines)
-  - `INVESTOR_TAKEAWAY`
-  - `CONFIDENCE`
-- Enforces strict citation and formatting guardrails
+- Uses **LangChain structured output** (`with_structured_output`) with a Pydantic model — guarantees schema-valid responses, no regex parsing
+- Produces six typed fields:
+  - `market_impacts` — asset-level first-movers and transmission channels
+  - `risks` — market mispricing and asymmetric expectations
+  - `scenarios` — base case + escalation with timelines
+  - `investor_takeaway` — actionable recommendations
+  - `confidence` — typed `Low | Medium | High`
+  - `sources` — cited evidence
+- Enforces strict institutional guardrails via prompt discipline
 
 ### External Signals Agent
 - Extracts relevant countries from the query context, including region keywords (e.g., "Middle East", "Gulf", "OPEC")
 - Covers 43 countries including full Middle East coverage (SAU, IRN, IRQ, ARE, QAT, etc.)
-- Fetches two indicators per country via the **World Bank Public API**:
+- Fetches **World Bank** macro indicators per country:
   - **Trade (% of GDP)** — all detected countries
   - **Oil Rents (% of GDP)** — oil-producing countries only
-- Adds contextual signals without influencing core reasoning
+- Fetches **live Yahoo Finance market prices** — always includes VIX, Brent crude, Gold, and DXY; adds query-specific tickers:
+  - China / Taiwan tensions → FXI (China ETF), TSM (TSMC)
+  - Oil / Russia / Ukraine → NG=F (Natural Gas futures)
+  - EM stress → EEM (EM ETF)
+  - Europe → FEZ (Euro Stoxx 50 ETF)
+- All signals (World Bank + live prices) are injected into the LLM prompt and displayed as metric tiles in the UI
 
 ---
 
@@ -235,10 +242,11 @@ across different geopolitical scenarios.
 
 - Python
 - LangGraph (agent orchestration)
-- LangChain
+- LangChain (structured output via Pydantic)
 - Vector Database (Chroma)
 - OpenAI-compatible LLMs
 - World Bank Public API
+- Yahoo Finance API (`yfinance`)
 - Streamlit
 
 ---
