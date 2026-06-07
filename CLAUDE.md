@@ -78,3 +78,43 @@ Set in `.env` (see `.env.example`):
 - RAG document ingestion chunks at 400 chars with 80-char overlap (max 1000 chars), batch size 64.
 - Docker image excludes `.chroma/` and `data/` — RAG DB must be rebuilt inside the container.
 - `fastapi`, `uvicorn`, `beautifulsoup4`, and `tiktoken` are installed as dependencies but are not used anywhere in the current codebase.
+
+
+# Claude Code Guidelines
+
+## Git Workflow
+
+Always follow the Git Flow branching strategy:
+
+### Branch Naming
+- New features: `feature/<short-description>` (e.g. `feature/user-auth`)
+- Bug fixes: `fix/<short-description>` (e.g. `fix/login-redirect`)
+- Hotfixes on main: `hotfix/<short-description>`
+- Releases: `release/<version>` (e.g. `release/1.2.0`)
+
+### Rules
+1. Never commit directly to `main` or `develop`
+2. Always branch off from `develop` for features and fixes
+3. Keep commits small and focused — one logical change per commit
+4. Write commit messages in this format:
+   `type(scope): short description`
+   Examples:
+   - `feat(auth): add JWT token refresh`
+   - `fix(api): handle null response from payments`
+   - `refactor(db): extract query builder`
+   - `docs(readme): update setup instructions`
+
+### Starting New Work
+When asked to implement a feature or fix:
+1. Create a branch from `develop`
+2. Make changes with clean, atomic commits
+3. Push the branch
+4. Summarize what a PR description should say
+
+### Commit Types
+- `feat` — new feature
+- `fix` — bug fix
+- `refactor` — code restructure, no behavior change
+- `test` — adding or updating tests
+- `docs` — documentation only
+- `chore` — build tools, dependencies, config
