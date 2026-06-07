@@ -19,7 +19,13 @@ dependencies = [
   "beautifulsoup4>=4.12.0",
   "tiktoken>=0.7.0",
   "chromadb>=0.5.0",
-  "pytest>=8.2.0"
+  "pytest>=8.2.0",
+  # --- Step 1: pgvector / PostgreSQL data layer ---
+  "sqlalchemy[asyncio]>=2.0.0",  # async ORM; asyncio extra pulls in greenlet
+  "asyncpg>=0.29.0",             # fastest async PostgreSQL driver (used by SQLAlchemy)
+  "pgvector>=0.3.0",             # Vector column type + SQLAlchemy / asyncpg integration
+  "passlib[bcrypt]>=1.7.4",      # bcrypt password hashing for user auth
+  "openai>=1.0.0"                # direct SDK for fallback re-embedding in migration script
 ]
 
 [tool.pytest.ini_options]
