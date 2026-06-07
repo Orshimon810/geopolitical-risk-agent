@@ -18,6 +18,11 @@ class Settings(BaseModel):
     session_query_limit: int = int(os.getenv("SESSION_QUERY_LIMIT", "5"))
     daily_query_limit: int = int(os.getenv("DAILY_QUERY_LIMIT", "30"))
 
+    # PostgreSQL connection string (Step 1: pgvector migration).
+    # Format: postgresql+asyncpg://user:pass@host:5432/dbname
+    # Managed services (Neon/Supabase): append ?sslmode=require
+    database_url: str = os.getenv("DATABASE_URL", "")
+
 
 # Singleton-like settings object
 settings = Settings()

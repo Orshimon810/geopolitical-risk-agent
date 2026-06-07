@@ -1,0 +1,162 @@
+-- =============================================================================
+-- Geopolitical Risk Agent — PostgreSQL Schema
+-- Step 1: pgvector migration for SaaS/multi-user production deployment
+--
+-- Run with:
+--   psql $DATABASE_URL -f db/schema.sql
+-- Or use the helper:
+--   python scripts/apply_schema.py
+--
+-- Prerequisites: PostgreSQL 15+, pgvector extension available on the server
+-- (On Neon/Supabase/RDS it is pre-installed; on self-hosted: CREATE EXTENSION)
+-- =============================================================================
+
+-- ----------------------------------------------------------------------------
+-- Extensions
+-- ----------------------------------------------------------------------------
+CREATE EXTENSION IF NOT EXISTS vector;      -- pgvector: vector type + HNSW/IVFFlat indexes
+CREATE EXTENSION IF NOT EXISTS pgcrypto;    -- gen_random_uuid() (built-in on PG 13+)
+
+-- ----------------------------------------------------------------------------
+-- Utility: auto-update updated_at on any row change
+-- ----------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION fn_set_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = NOW();
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+
+-- ============================================================================
+-- TABLE: users
+-- Central identity store for the SaaS multi-tenant model.
+-- Password hashing is done in the application layer (passlib/bcrypt).
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS users (
+    id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    email               TEXT        NOT NULL,
+    password_hash       TEXT        NOT NULL,
+    full_name           TEXT,
+    is_active           BOOLEAN     NOT NULL DEFAULT TRUE,
+
+    -- Subscription tier controls query limits and feature access
+    tier                TEXT        NOT NULL DEFAULT 'free'
+                        CONSTRAINT chk_users_tier CHECK (tier IN ('free', 'pro', 'enterprise')),
+
+    -- Rate-limiting counters; application resets daily_query_count when
+    -- NOW() > daily_reset_at + INTERVAL '1 day'
+    daily_query_count   INTEGER     NOT NULL DEFAULT 0,
+    daily_reset_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT uq_users_email UNIQUE (email)
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_email
+    ON users (email);
+
+CREATE TRIGGER trg_users_updated_at
+    BEFORE UPDATE ON users
+    FOR EACH ROW EXECUTE FUNCTION fn_set_updated_at();
+
+COMMENT ON TABLE  users                     IS 'SaaS user accounts with tier-based rate limiting.';
+COMMENT ON COLUMN users.tier                IS 'free | pro | enterprise — controls query limits.';
+COMMENT ON COLUMN users.daily_query_count   IS 'Resets to 0 each calendar day; checked by the API layer.';
+
+
+-- ============================================================================
+-- TABLE: geopolitical_embeddings
+-- Stores RAG document chunks alongside their 1536-dim OpenAI embeddings.
+-- HNSW index enables sub-millisecond approximate nearest-neighbor search.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS geopolitical_embeddings (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    -- Stable content-addressable key (original Chroma ID or sha256 of text).
+    -- Used for idempotent upserts: re-ingesting the same document is safe.
+    chunk_id        TEXT        NOT NULL,
+
+    source          TEXT        NOT NULL,           -- filename or canonical URL
+    text            TEXT        NOT NULL,           -- raw chunk text fed to the LLM
+    embedding       vector(1536) NOT NULL,          -- OpenAI text-embedding-3-small output
+
+    -- Arbitrary key-value bag: page number, section title, ingestion date, etc.
+    metadata        JSONB       NOT NULL DEFAULT '{}',
+
+    ingested_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT uq_embeddings_chunk_id UNIQUE (chunk_id)
+);
+
+-- B-tree for filtered queries scoped to a single source document
+CREATE INDEX IF NOT EXISTS idx_embeddings_source
+    ON geopolitical_embeddings (source);
+
+-- HNSW index for fast approximate nearest-neighbor search (cosine distance).
+--
+-- Tuning knobs:
+--   m               = max bidirectional links per node per layer.
+--                     16 is the pgvector default; raise to 24-32 for higher recall
+--                     at the cost of ~25% more memory and build time.
+--   ef_construction = candidate pool during index build.
+--                     64 is conservative and fast; 128 gives ~1% better recall
+--                     for large corpora (>100k vectors).
+--
+-- At query time, increase recall by running:
+--   SET LOCAL hnsw.ef_search = 100;   -- default 40
+-- before your SELECT statement inside the same transaction.
+CREATE INDEX IF NOT EXISTS idx_embeddings_hnsw
+    ON geopolitical_embeddings
+    USING hnsw (embedding vector_cosine_ops)
+    WITH (m = 16, ef_construction = 64);
+
+COMMENT ON TABLE  geopolitical_embeddings           IS 'RAG corpus: document chunks + OpenAI embeddings for semantic retrieval.';
+COMMENT ON COLUMN geopolitical_embeddings.chunk_id  IS 'Stable deduplication key. Matches original Chroma doc ID after migration.';
+COMMENT ON COLUMN geopolitical_embeddings.embedding IS 'text-embedding-3-small (1536 dims). Cosine similarity via <=> operator.';
+
+
+-- ============================================================================
+-- TABLE: analysis_history
+-- Persists every investment-grade report the agent generates.
+-- Linked to a user (nullable for anonymous/CLI invocations).
+-- The `report` JSONB column stores the full AnalysisOutput.model_dump() dict.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS analysis_history (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    -- NULL = anonymous / CLI run; ON DELETE SET NULL preserves history if user is deleted
+    user_id         UUID        REFERENCES users (id) ON DELETE SET NULL,
+
+    query           TEXT        NOT NULL,
+    report          JSONB       NOT NULL,   -- full AnalysisOutput dict
+
+    confidence      TEXT        NOT NULL
+                    CONSTRAINT chk_history_confidence CHECK (confidence IN ('Low', 'Medium', 'High')),
+
+    -- Observability metadata — useful for cost tracking and latency analysis
+    model_name      TEXT,                   -- e.g. "gpt-4o-mini"
+    tokens_used     INTEGER,                -- total prompt + completion tokens
+    duration_ms     INTEGER,                -- wall-clock time for the full pipeline
+
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Primary lookup: all reports for a user, newest first (supports pagination)
+CREATE INDEX IF NOT EXISTS idx_history_user_created
+    ON analysis_history (user_id, created_at DESC);
+
+-- Secondary index: filter by confidence across all users (e.g. admin analytics)
+CREATE INDEX IF NOT EXISTS idx_history_confidence
+    ON analysis_history (confidence);
+
+-- GIN index on report JSONB for ad-hoc JSON path queries in admin tooling
+CREATE INDEX IF NOT EXISTS idx_history_report_gin
+    ON analysis_history USING gin (report);
+
+COMMENT ON TABLE  analysis_history          IS 'Full investment-grade analysis reports produced by the LangGraph pipeline.';
+COMMENT ON COLUMN analysis_history.report   IS 'AnalysisOutput.model_dump() — contains market_impacts, risks, scenarios, etc.';
+COMMENT ON COLUMN analysis_history.user_id  IS 'NULL for anonymous invocations (CLI, evaluation suite).';
