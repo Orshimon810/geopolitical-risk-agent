@@ -5,6 +5,7 @@ from georisk_agent.agents.nodes_analysis import AnalysisOutput
 
 
 VALID_OUTPUT = {
+    "reasoning": "Oil shock transmits via inflation expectations to bonds first, then equities.",
     "market_impacts": ["Oil prices surge 15-20% on supply disruption"],
     "risks": ["Market underestimates escalation speed and containment failure"],
     "scenarios": [

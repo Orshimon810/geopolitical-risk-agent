@@ -1,6 +1,7 @@
 import re
 import requests
 import yfinance as yf
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, Any
 
 from georisk_agent.app.types import AgentState
@@ -110,21 +111,27 @@ def build_tickers(isos: list[str]) -> Dict[str, str]:
 
 
 def fetch_market_snapshot(tickers: Dict[str, str]) -> Dict[str, Any]:
-    results: Dict[str, Any] = {}
-    for symbol, label in tickers.items():
+    def _fetch_one(symbol: str, label: str):
         try:
             info = yf.Ticker(symbol).fast_info
             price = info.last_price
             prev = info.previous_close
             change_pct = ((price - prev) / prev * 100) if prev else None
-            results[symbol] = {
+            return symbol, {
                 "label": label,
                 "price": round(price, 2),
                 "change_1d_pct": round(change_pct, 2) if change_pct is not None else None,
                 "status": "ok",
             }
         except Exception as e:
-            results[symbol] = {"label": label, "status": "error", "error": str(e)}
+            return symbol, {"label": label, "status": "error", "error": str(e)}
+
+    results: Dict[str, Any] = {}
+    with ThreadPoolExecutor(max_workers=min(len(tickers), 8)) as executor:
+        futures = {executor.submit(_fetch_one, sym, lbl): sym for sym, lbl in tickers.items()}
+        for future in as_completed(futures):
+            symbol, result = future.result()
+            results[symbol] = result
     return results
 
 
@@ -184,15 +191,20 @@ def signals_node(state: AgentState) -> AgentState:
 
     signals: Dict[str, Any] = {"countries": {}}
 
+    def _fetch_country(iso: str):
+        entry: Dict[str, Any] = {"trade_gdp": fetch_trade_gdp(iso)}
+        if iso in OIL_PRODUCER_ISOS:
+            entry["oil_rents"] = fetch_oil_rents(iso)
+        return iso, entry
+
     if not countries:
         signals["note"] = "No relevant countries detected from query."
     else:
-        for iso in countries:
-            entry: Dict[str, Any] = {}
-            entry["trade_gdp"] = fetch_trade_gdp(iso)
-            if iso in OIL_PRODUCER_ISOS:
-                entry["oil_rents"] = fetch_oil_rents(iso)
-            signals["countries"][iso] = entry
+        with ThreadPoolExecutor(max_workers=min(len(countries), 6)) as executor:
+            futures = [executor.submit(_fetch_country, iso) for iso in countries]
+            for future in as_completed(futures):
+                iso, entry = future.result()
+                signals["countries"][iso] = entry
 
     tickers = build_tickers(countries)
     signals["market_data"] = fetch_market_snapshot(tickers)
