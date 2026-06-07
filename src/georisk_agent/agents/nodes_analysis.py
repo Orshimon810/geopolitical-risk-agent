@@ -12,8 +12,17 @@ from georisk_agent.app.types import AgentState
 # -------------------------
 
 class AnalysisOutput(BaseModel):
+    reasoning: str = Field(
+        description=(
+            "Internal reasoning scratchpad — think step by step BEFORE filling any other field. "
+            "Trace the full causal chain: what happens first, what transmits next, what does the market "
+            "currently assume, where is that assumption likely wrong, and what is the realistic timeline. "
+            "Be specific about asset classes, mechanisms, and feedback loops. "
+            "This field is for reasoning only and will not be shown to users."
+        )
+    )
     market_impacts: list[str] = Field(
-        description="Asset-level market impact bullets. Identify which asset class reprices first."
+        description="Asset-level market impact bullets. Identify which asset class reprices first and trace the transmission sequence."
     )
     risks: list[str] = Field(
         description="Market mispricing risks — what the market believes and why that belief may be wrong."
@@ -22,7 +31,12 @@ class AnalysisOutput(BaseModel):
         description="Exactly 2 entries: 'Base case: ...' and 'Escalation case: ...' with timelines."
     )
     investor_takeaway: list[str] = Field(
-        description="Actionable investor recommendations."
+        description=(
+            "Actionable investor recommendations. Each bullet must name BOTH what to reduce/exit "
+            "AND what to rotate into or increase. Example: 'Reduce EM equity exposure, rotate into "
+            "short-duration UST and gold as safe-haven hedge.' Never say only 'reduce X' without "
+            "specifying the destination asset."
+        )
     )
     confidence: Literal["Low", "Medium", "High"] = Field(
         description="Confidence level based on evidence quality and consistency."
@@ -56,10 +70,21 @@ Provide concrete market intelligence suitable for institutional investors.
 Always reference specific asset classes when relevant.
 Avoid vague phrases like "markets may react".
 
+Before drawing any conclusion:
+- Trace the full causal sequence (A → B → C) before stating what reprices.
+- Identify the specific mechanism that transmits the shock (trade links,
+  financial contagion, currency moves, commodity pricing, policy response).
+- Ask: what does the market currently assume? Where is that assumption fragile?
+- State both which assets are most exposed AND which are relatively resilient.
+
 Explain clearly:
-- which assets move first
-- transmission mechanisms
-- plausible timelines
+- which assets move first and why
+- transmission mechanisms step by step
+- plausible timelines for first-order vs second-order effects
+
+Investor takeaway discipline:
+- Every recommendation must name a destination asset, not just an exit.
+- "Reduce X, increase Y" is the minimum acceptable format.
 
 Confidence rules:
 - HIGH only if evidence is strong, consistent, historically validated,
@@ -222,6 +247,7 @@ Scenario discipline:
         "sources": sources,
         "debug": {
             **(state.get("debug") or {}),
+            "analysis_reasoning": output.reasoning,
             "analysis_structured_output": output.model_dump(),
         },
     }

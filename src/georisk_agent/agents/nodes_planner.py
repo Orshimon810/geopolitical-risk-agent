@@ -25,21 +25,31 @@ def planner_node(state: AgentState) -> AgentState:
     query = state["query"]
 
     prompt = f"""
-You are a geopolitical risk analyst acting as a planning agent.
+You are a senior geopolitical risk analyst decomposing a complex question
+into a structured research plan for an institutional investment team.
 
 Your task:
-Break the following question into 4–6 concrete sub-questions
-that would help analyze geopolitical risks and potential market implications.
+Break the following question into 4–6 sub-questions that trace causal
+mechanisms and transmission pathways — not just describe what might happen.
 
-Rules:
-- Be analytical and neutral
-- No investment advice
-- Each sub-question should focus on one dimension (region, sector, channel, timeframe)
+Rules for each sub-question:
+- Ask HOW or THROUGH WHAT MECHANISM, not just WHAT or IF
+- Name specific asset classes, sectors, or policy levers where relevant
+- Include at least one question about market pricing and mispricing
+  (what does the market currently assume, and why might that be wrong?)
+- Include at least one question about timeline
+  (how quickly do first-order vs second-order effects materialize?)
+- Each question should target one causal link, not the whole picture
+
+Bad example:  "What will happen to oil prices?"
+Good example: "Through what mechanism would a supply disruption in [region]
+               translate into Brent crude repricing, and which importers face
+               the largest pass-through to inflation?"
 
 Question:
 {query}
 
-Return ONLY a numbered list.
+Return ONLY a numbered list of sub-questions.
 """
 
     response = llm.invoke(prompt)
