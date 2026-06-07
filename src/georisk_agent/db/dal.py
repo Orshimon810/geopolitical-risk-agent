@@ -158,13 +158,13 @@ async def upsert_embedding(
         )
         .on_conflict_do_update(
             index_elements=["chunk_id"],
-            set_=dict(
-                source=source,
-                text=text_content,
-                embedding=embedding,
-                metadata_=metadata or {},
-                ingested_at=datetime.now(timezone.utc),
-            ),
+            set_={
+                "source": source,
+                "text": text_content,
+                "embedding": embedding,
+                "metadata": metadata or {},  # DB column name as key (not the Python attr metadata_)
+                "ingested_at": datetime.now(timezone.utc),
+            },
         )
         .returning(GeopoliticalEmbedding)
     )
@@ -204,20 +204,20 @@ async def bulk_upsert_embeddings(
             for r in batch
         ]
 
-        excluded = pg_insert(GeopoliticalEmbedding).excluded
-        stmt = (
-            pg_insert(GeopoliticalEmbedding)
-            .values(values)
-            .on_conflict_do_update(
-                index_elements=["chunk_id"],
-                set_=dict(
-                    source=excluded.source,
-                    text=excluded.text,
-                    embedding=excluded.embedding,
-                    metadata_=excluded.metadata_,
-                    ingested_at=datetime.now(timezone.utc),
-                ),
-            )
+        # Build insert + upsert from the same `ins` object so that `ins.excluded`
+        # refers to the correct statement. Access the `metadata` column by its
+        # DB column name (not the Python attribute name `metadata_`) to avoid
+        # the KeyError that occurs when SQLAlchemy resolves excluded by column name.
+        ins = pg_insert(GeopoliticalEmbedding).values(values)
+        stmt = ins.on_conflict_do_update(
+            index_elements=["chunk_id"],
+            set_={
+                "source": ins.excluded.source,
+                "text": ins.excluded.text,
+                "embedding": ins.excluded.embedding,
+                "metadata": ins.excluded["metadata"],
+                "ingested_at": datetime.now(timezone.utc),
+            },
         )
         await session.execute(stmt)
         total += len(batch)
@@ -275,20 +275,22 @@ async def semantic_search(
     if source_filter:
         params["source"] = source_filter
 
+    # asyncpg chokes on :param::type (the double-colon after a named param
+    # is ambiguous). Use CAST(:param AS type) for the explicit cast instead.
     sql = text(f"""
         SELECT
             chunk_id,
             source,
             text,
             metadata,
-            1 - (embedding <=> :vec::vector)  AS similarity
+            1 - (embedding <=> CAST(:vec AS vector))  AS similarity
         FROM
             geopolitical_embeddings
         WHERE
-            1 - (embedding <=> :vec::vector) >= :min_sim
+            1 - (embedding <=> CAST(:vec AS vector)) >= :min_sim
             {source_clause}
         ORDER BY
-            embedding <=> :vec::vector
+            embedding <=> CAST(:vec AS vector)
         LIMIT :k
     """)
 

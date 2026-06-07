@@ -75,21 +75,28 @@ async def get_engine() -> AsyncEngine:
                 "For Neon: postgresql+asyncpg://user:pass@ep-xxx.neon.tech/dbname?sslmode=require"
             )
 
+        # asyncpg requires SSL to be passed via connect_args, not the URL.
+        # The standard ?sslmode=require / ?ssl=true query params are parsed
+        # inconsistently across SQLAlchemy versions; connect_args is reliable.
+        import ssl as _ssl
+        ssl_ctx = _ssl.create_default_context()
+
         _engine = create_async_engine(
             db_url,
             # Pool sizing: 10 persistent + 20 burst = 30 max concurrent DB connections.
-            # Tune pool_size to (CPU cores * 2) for CPU-bound workloads, or to your
-            # cloud DB's max_connections / number_of_app_instances for I/O-bound SaaS.
             pool_size=10,
             max_overflow=20,
             # Validate the connection before handing it to the application.
-            # Adds one round-trip but eliminates "server closed the connection" errors
-            # after idle timeouts (common with managed cloud databases).
+            # Eliminates "server closed the connection" errors after idle timeouts
+            # (common on Neon, Supabase, RDS which aggressively time out idle conns).
             pool_pre_ping=True,
             # Recycle connections older than 1 hour to avoid stale TCP/TLS state.
             pool_recycle=3600,
             # Echo SQL to console only in dev; never in prod (leaks query content).
             echo=settings.app_env == "dev",
+            # Neon (and all managed PG services) require TLS.
+            # create_default_context() uses the OS trust store — correct for cloud CAs.
+            connect_args={"ssl": ssl_ctx},
         )
 
         _session_factory = async_sessionmaker(
