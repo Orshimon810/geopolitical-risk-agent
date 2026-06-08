@@ -1,9 +1,0 @@
-{
-  "mcpServers": {
-    "Neon": {
-      "type": "stdio",
-      "command": "npx",
-      "args": ["-y", "@neondatabase/mcp-server-neon", "start", "napi_ef5uhtjm3l5tzkdq5p5el335mx1fmolpald36ou8qg7jy3vu1lpq1k9h9iyf45ei"]
-    }
-  }
-}
