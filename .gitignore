@@ -190,3 +190,6 @@ cython_debug/
 
 # Claude Code
 .claude/settings.local.json
+
+# MCP config (contains API keys)
+.mcp.json
