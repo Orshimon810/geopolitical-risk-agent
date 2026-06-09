@@ -6,31 +6,43 @@ readme = "README.md"
 requires-python = ">=3.10"
 
 dependencies = [
+  # --- LLM / agent pipeline ---
   "langchain>=0.2.10",
   "langgraph>=0.2.0",
   "langchain-openai>=0.1.20",
-  "python-dotenv>=1.0.1",
-  "pydantic>=2.7.0",
-  "fastapi>=0.111.0",
-  "uvicorn>=0.30.0",
-  "streamlit>=1.36.0",
+  "openai>=1.0.0",               # direct SDK used by ingest scripts
+  "tiktoken>=0.7.0",
+
+  # --- Data / signals ---
   "requests>=2.32.0",
   "yfinance>=0.2.40",
   "beautifulsoup4>=4.12.0",
-  "tiktoken>=0.7.0",
-  "chromadb>=0.5.0",
+
+  # --- Web framework ---
+  "fastapi>=0.111.0",
+  "uvicorn[standard]>=0.30.0",
+  "email-validator>=2.1.0",      # Pydantic EmailStr validation
+
+  # --- PostgreSQL / pgvector data layer ---
+  "sqlalchemy[asyncio]>=2.0.0",  # async ORM
+  "asyncpg>=0.29.0",             # async PostgreSQL driver
+  "pgvector>=0.3.0",             # Vector column type
+
+  # --- Auth / security ---
+  "bcrypt>=4.0.0",               # password hashing (used directly, not via passlib)
+  "python-jose[cryptography]>=3.3.0",  # JWT
+
+  # --- Task queue / caching ---
+  "redis>=5.0.0",                # redis.asyncio + sync client for Celery
+  "celery>=5.3.0",
+
+  # --- Config / utilities ---
+  "python-dotenv>=1.0.1",
+  "pydantic>=2.7.0",
+
+  # --- Tests ---
   "pytest>=8.2.0",
-  # --- Step 1: pgvector / PostgreSQL data layer ---
-  "sqlalchemy[asyncio]>=2.0.0",  # async ORM; asyncio extra pulls in greenlet
-  "asyncpg>=0.29.0",             # fastest async PostgreSQL driver (used by SQLAlchemy)
-  "pgvector>=0.3.0",             # Vector column type + SQLAlchemy / asyncpg integration
-  "passlib[bcrypt]>=1.7.4",      # bcrypt password hashing for user auth
-  "openai>=1.0.0",               # direct SDK for fallback re-embedding in migration script
-  # --- Step 2: async backend, task queue, security ---
-  "python-jose[cryptography]>=3.3.0",  # JWT token creation and validation
-  "redis>=5.0.0",                      # async (redis.asyncio) + sync Redis client for Celery tasks
-  "celery>=5.3.0",                     # distributed task queue (RabbitMQ / SQS / Redis broker)
-  "email-validator>=2.1.0"             # Pydantic EmailStr validation support
+  "pytest-asyncio>=0.23.0",
 ]
 
 [tool.pytest.ini_options]

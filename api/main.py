@@ -4,7 +4,7 @@ FastAPI application entry point.
 Start the server:
     uvicorn api.main:app --reload --port 8000
 
-Interactive API docs:
+Interactive API docs (dev only — disabled when APP_ENV=prod):
     http://localhost:8000/docs   (Swagger UI)
     http://localhost:8000/redoc  (ReDoc)
 """
@@ -18,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.core.redis_client import close_redis, get_redis
 from api.routers import agent, auth
+from georisk_agent.app.config import settings
 from georisk_agent.db.client import close_engine, get_engine
 
 logging.basicConfig(
@@ -29,7 +30,8 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialise shared resources on startup; release them on shutdown."""
+    """Validate config, then initialise shared resources. Release on shutdown."""
+    settings.validate_for_production()
     logger.info("Starting up — initialising DB engine and Redis client…")
     await get_engine()
     await get_redis()
@@ -41,6 +43,11 @@ async def lifespan(app: FastAPI):
     logger.info("Shutdown complete.")
 
 
+# Swagger / ReDoc are disabled in production — the schema reveals all endpoints.
+_docs_url = None if settings.is_prod else "/docs"
+_redoc_url = None if settings.is_prod else "/redoc"
+_openapi_url = None if settings.is_prod else "/openapi.json"
+
 app = FastAPI(
     title="Geopolitical Risk Agent API",
     description=(
@@ -50,6 +57,9 @@ app = FastAPI(
     ),
     version="0.2.0",
     lifespan=lifespan,
+    docs_url=_docs_url,
+    redoc_url=_redoc_url,
+    openapi_url=_openapi_url,
 )
 
 _cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",")
@@ -57,8 +67,8 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 app.include_router(auth.router)
