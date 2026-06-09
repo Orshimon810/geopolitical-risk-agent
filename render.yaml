@@ -66,14 +66,9 @@ services:
   - type: worker
     name: georisk-worker
     runtime: docker
-    dockerfilePath: ./Dockerfile.api
+    dockerfilePath: ./Dockerfile.worker
     dockerContext: .
     plan: starter          # $7/month
-    startCommand: >
-      celery -A api.worker.celery_app worker
-      --loglevel=info
-      --pool=prefork
-      --concurrency=2
     autoDeploy: true
     envVars:
       - key: APP_ENV
