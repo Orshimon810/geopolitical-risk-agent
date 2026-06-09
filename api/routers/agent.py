@@ -127,7 +127,6 @@ async def delete_analysis(
     deleted = await delete_analysis_by_id(
         session, uuid.UUID(analysis_id), current_user.id
     )
-    await session.commit()
     if not deleted:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
