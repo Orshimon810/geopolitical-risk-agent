@@ -27,9 +27,20 @@ export function MarketSignals({ signals }: MarketSignalsProps) {
     ([, v]) => v.status === "ok"
   );
 
-  const countryEntries = Object.entries(signals.countries ?? {});
+  // Pre-compute macro rows so we only render the section when data actually exists
+  interface MacroRow { key: string; label: string; value: number; year?: string }
+  const macroRows: MacroRow[] = Object.entries(signals.countries ?? {}).flatMap(([iso, data]) => {
+    const rows: MacroRow[] = [];
+    if (data.trade_gdp?.status === "ok" && data.trade_gdp.value !== undefined) {
+      rows.push({ key: `${iso}-trade`, label: `${iso} — Trade % of GDP`, value: data.trade_gdp.value, year: data.trade_gdp.year });
+    }
+    if (data.oil_rents?.status === "ok" && data.oil_rents.value !== undefined) {
+      rows.push({ key: `${iso}-oil`, label: `${iso} — Oil Rents % of GDP`, value: data.oil_rents.value, year: data.oil_rents.year });
+    }
+    return rows;
+  });
 
-  if (marketEntries.length === 0 && countryEntries.length === 0) return null;
+  if (marketEntries.length === 0 && macroRows.length === 0) return null;
 
   return (
     <Card>
@@ -69,53 +80,25 @@ export function MarketSignals({ signals }: MarketSignalsProps) {
           </>
         )}
 
-        {/* Macro indicators by country */}
-        {countryEntries.length > 0 && (
+        {/* Macro indicators — only rendered when there is actual data */}
+        {macroRows.length > 0 && (
           <>
             <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-600 pt-2">
               Macro Indicators
             </p>
             <div className="space-y-1.5">
-              {countryEntries.flatMap(([iso, data]) => {
-                const rows = [];
-                if (data.trade_gdp?.status === "ok" && data.trade_gdp.value !== undefined) {
-                  rows.push(
-                    <div
-                      key={`${iso}-trade`}
-                      className="flex items-center justify-between rounded-md px-3 py-2 bg-slate-950 border border-slate-800"
-                    >
-                      <span className="text-xs text-slate-400">
-                        {iso} — Trade % of GDP
-                      </span>
-                      <span className="text-xs font-semibold text-slate-200">
-                        {data.trade_gdp.value.toFixed(1)}%
-                        <span className="text-slate-600 font-normal ml-1">
-                          ({data.trade_gdp.year})
-                        </span>
-                      </span>
-                    </div>
-                  );
-                }
-                if (data.oil_rents?.status === "ok" && data.oil_rents.value !== undefined) {
-                  rows.push(
-                    <div
-                      key={`${iso}-oil`}
-                      className="flex items-center justify-between rounded-md px-3 py-2 bg-slate-950 border border-slate-800"
-                    >
-                      <span className="text-xs text-slate-400">
-                        {iso} — Oil Rents % of GDP
-                      </span>
-                      <span className="text-xs font-semibold text-slate-200">
-                        {data.oil_rents.value.toFixed(1)}%
-                        <span className="text-slate-600 font-normal ml-1">
-                          ({data.oil_rents.year})
-                        </span>
-                      </span>
-                    </div>
-                  );
-                }
-                return rows;
-              })}
+              {macroRows.map(({ key, label, value, year }) => (
+                <div
+                  key={key}
+                  className="flex items-center justify-between rounded-md px-3 py-2 bg-slate-950 border border-slate-800"
+                >
+                  <span className="text-xs text-slate-400">{label}</span>
+                  <span className="text-xs font-semibold text-slate-200">
+                    {value.toFixed(1)}%
+                    {year && <span className="text-slate-600 font-normal ml-1">({year})</span>}
+                  </span>
+                </div>
+              ))}
             </div>
           </>
         )}
