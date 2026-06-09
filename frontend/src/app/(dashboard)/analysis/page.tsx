@@ -18,11 +18,6 @@ const EXAMPLE_QUERIES = [
   "Assess how a snap UK election would affect gilt markets and sterling volatility.",
 ];
 
-const ANALYSIS_DEPTH_OPTIONS = [
-  { value: "standard", label: "Standard — Balanced depth (default)" },
-  { value: "deep", label: "Deep — Extended scenario analysis" },
-  { value: "flash", label: "Flash — Quick market signals only" },
-];
 
 export default function AnalysisPage() {
   const [query, setQuery] = useState("");
@@ -135,20 +130,7 @@ export default function AnalysisPage() {
           </div>
         )}
 
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-2">
-            <Label htmlFor="depth" className="text-slate-500 whitespace-nowrap">Depth</Label>
-            <select
-              id="depth"
-              disabled={running}
-              className="rounded-md border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs text-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              {ANALYSIS_DEPTH_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>{o.label}</option>
-              ))}
-            </select>
-          </div>
-
+        <div className="flex justify-end">
           <Button
             onClick={handleSubmit}
             disabled={query.trim().length < 10 || running || uiState === "done"}

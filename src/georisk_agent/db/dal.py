@@ -99,29 +99,6 @@ async def authenticate_user(
     return user
 
 
-async def increment_daily_query_count(
-    session: AsyncSession, user_id: uuid.UUID
-) -> int:
-    """
-    Atomically increment the daily query counter, resetting it if the day has rolled over.
-    Returns the new counter value so the caller can enforce tier limits.
-    Raises ValueError if the user is not found.
-    """
-    user = await get_user_by_id(session, user_id)
-    if user is None:
-        raise ValueError(f"User {user_id} not found")
-
-    now = datetime.now(timezone.utc)
-    if user.daily_reset_at.date() < now.date():
-        user.daily_query_count = 1
-        user.daily_reset_at = now
-    else:
-        user.daily_query_count += 1
-
-    await session.flush()
-    return user.daily_query_count
-
-
 # =============================================================================
 # Embeddings — ingestion (upsert) + semantic retrieval
 # =============================================================================
