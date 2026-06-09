@@ -385,6 +385,20 @@ async def get_analysis_by_id(
     return result.scalar_one_or_none()
 
 
+async def delete_analysis_by_id(
+    session: AsyncSession,
+    analysis_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> bool:
+    """Delete a single analysis by ID, enforcing ownership. Returns True if deleted."""
+    result = await session.execute(
+        delete(AnalysisHistory)
+        .where(AnalysisHistory.id == analysis_id)
+        .where(AnalysisHistory.user_id == user_id)
+    )
+    return result.rowcount > 0  # type: ignore[return-value]
+
+
 async def delete_user_history(
     session: AsyncSession, user_id: uuid.UUID
 ) -> int:

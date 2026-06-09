@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Eye, ChevronLeft, ChevronRight } from "lucide-react";
+import { Eye, Trash2, ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,15 +19,28 @@ function confidenceVariant(c: Confidence) {
 interface HistoryTableProps {
   items: HistoryItem[];
   onViewReport: (item: HistoryItem) => void;
+  onDelete: (id: string) => Promise<void>;
 }
 
-export function HistoryTable({ items, onViewReport }: HistoryTableProps) {
+export function HistoryTable({ items, onViewReport, onDelete }: HistoryTableProps) {
   const [filter, setFilter] = useState<Filter>("all");
   const [page, setPage] = useState(0);
+  const [confirmId, setConfirmId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const filtered = filter === "all" ? items : items.filter((i) => i.confidence === filter);
   const totalPages = Math.ceil(filtered.length / PAGE_SIZE);
   const paged = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+
+  async function handleDelete(id: string) {
+    setDeletingId(id);
+    try {
+      await onDelete(id);
+    } finally {
+      setDeletingId(null);
+      setConfirmId(null);
+    }
+  }
 
   return (
     <div className="space-y-3">
@@ -59,7 +72,7 @@ export function HistoryTable({ items, onViewReport }: HistoryTableProps) {
               <TableHead>Query</TableHead>
               <TableHead>Risk Level</TableHead>
               <TableHead>Markets Impacted</TableHead>
-              <TableHead className="text-right">Action</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -98,10 +111,49 @@ export function HistoryTable({ items, onViewReport }: HistoryTableProps) {
                     </div>
                   </TableCell>
                   <TableCell className="text-right">
-                    <Button size="sm" variant="ghost" onClick={() => onViewReport(item)}>
-                      <Eye className="h-3.5 w-3.5" />
-                      View
-                    </Button>
+                    <div className="flex items-center justify-end gap-1">
+                      {confirmId === item.id ? (
+                        <>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="text-slate-400 hover:text-slate-200 text-xs h-7 px-2"
+                            onClick={() => setConfirmId(null)}
+                            disabled={deletingId === item.id}
+                          >
+                            Cancel
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="text-red-400 hover:text-red-300 hover:bg-red-950/40 text-xs h-7 px-2"
+                            onClick={() => handleDelete(item.id)}
+                            disabled={deletingId === item.id}
+                          >
+                            {deletingId === item.id ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              "Delete"
+                            )}
+                          </Button>
+                        </>
+                      ) : (
+                        <>
+                          <Button size="sm" variant="ghost" onClick={() => onViewReport(item)}>
+                            <Eye className="h-3.5 w-3.5" />
+                            View
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="text-slate-600 hover:text-red-400"
+                            onClick={() => setConfirmId(item.id)}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </>
+                      )}
+                    </div>
                   </TableCell>
                 </TableRow>
               ))

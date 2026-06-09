@@ -65,7 +65,14 @@ export default function HistoryPage() {
           <Loader2 className="h-5 w-5 animate-spin text-blue-500" />
         </div>
       ) : (
-        <HistoryTable items={items} onViewReport={setSelected} />
+        <HistoryTable
+            items={items}
+            onViewReport={setSelected}
+            onDelete={async (id) => {
+              await api.deleteAnalysis(id);
+              setItems((prev) => prev.filter((i) => i.id !== id));
+            }}
+          />
       )}
 
     </div>

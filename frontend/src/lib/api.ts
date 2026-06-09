@@ -55,4 +55,10 @@ export const api = {
       `/agent/history?limit=${limit}&offset=${offset}`
     );
   },
+
+  deleteAnalysis(id: string): Promise<{ deleted: boolean }> {
+    return apiFetch<{ deleted: boolean }>(`/agent/history/${id}`, {
+      method: "DELETE",
+    });
+  },
 };

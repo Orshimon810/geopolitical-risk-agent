@@ -27,7 +27,7 @@ from api.core.redis_client import get_redis
 from api.dependencies import check_rate_limit, db_session, get_current_user
 from api.schemas.agent import AnalyzeRequest, HistoryItemResponse, TaskCreatedResponse, TaskStatusResponse
 from api.worker.tasks import run_geopolitical_agent_task
-from georisk_agent.db.dal import get_user_history
+from georisk_agent.db.dal import delete_analysis_by_id, get_user_history
 from georisk_agent.db.models import User
 
 router = APIRouter(prefix="/agent", tags=["Agent"])
@@ -112,3 +112,25 @@ async def get_task_status(
 
     data = json.loads(raw)
     return TaskStatusResponse(task_id=task_id, **data)
+
+
+@router.delete(
+    "/history/{analysis_id}",
+    status_code=status.HTTP_200_OK,
+    summary="Delete an analysis from the authenticated user's history",
+)
+async def delete_analysis(
+    analysis_id: str,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(db_session),
+) -> dict:
+    deleted = await delete_analysis_by_id(
+        session, uuid.UUID(analysis_id), current_user.id
+    )
+    await session.commit()
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Analysis not found.",
+        )
+    return {"deleted": True}
