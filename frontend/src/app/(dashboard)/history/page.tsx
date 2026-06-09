@@ -11,12 +11,16 @@ import type { HistoryItem } from "@/lib/types";
 export default function HistoryPage() {
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [selected, setSelected] = useState<HistoryItem | null>(null);
 
   useEffect(() => {
     api
       .getHistory()
       .then(setItems)
+      .catch((err: unknown) =>
+        setError(err instanceof Error ? err.message : "Failed to load history")
+      )
       .finally(() => setLoading(false));
   }, []);
 
@@ -63,6 +67,10 @@ export default function HistoryPage() {
       {loading ? (
         <div className="flex items-center justify-center py-20">
           <Loader2 className="h-5 w-5 animate-spin text-blue-500" />
+        </div>
+      ) : error ? (
+        <div className="rounded-xl border border-rose-800 bg-rose-950/30 p-6 text-center">
+          <p className="text-sm text-rose-400">{error}</p>
         </div>
       ) : (
         <HistoryTable
