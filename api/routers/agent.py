@@ -1,10 +1,14 @@
 """
-Agent router — /agent/analyze and /agent/tasks/{task_id}.
+Agent router — /agent/analyze, /agent/history, and /agent/tasks/{task_id}.
 
 POST /agent/analyze
   • Protected by JWT auth + per-user rate limiter.
   • Dispatches a Celery background task and immediately returns 202 Accepted
     with the task_id so the client can poll for results.
+
+GET /agent/history
+  • Protected by JWT auth.
+  • Returns paginated analysis history from the DB for the authenticated user.
 
 GET /agent/tasks/{task_id}
   • Protected by JWT auth.
@@ -16,12 +20,14 @@ import uuid
 from datetime import datetime, timezone
 
 import redis.asyncio as aioredis
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from api.core.redis_client import get_redis
-from api.dependencies import check_rate_limit, get_current_user
-from api.schemas.agent import AnalyzeRequest, TaskCreatedResponse, TaskStatusResponse
+from api.dependencies import check_rate_limit, db_session, get_current_user
+from api.schemas.agent import AnalyzeRequest, HistoryItemResponse, TaskCreatedResponse, TaskStatusResponse
 from api.worker.tasks import run_geopolitical_agent_task
+from georisk_agent.db.dal import get_user_history
 from georisk_agent.db.models import User
 
 router = APIRouter(prefix="/agent", tags=["Agent"])
@@ -65,6 +71,21 @@ async def analyze(
     )
 
     return TaskCreatedResponse(task_id=task_id)
+
+
+@router.get(
+    "/history",
+    response_model=list[HistoryItemResponse],
+    summary="Get the authenticated user's analysis history (newest first)",
+)
+async def get_history(
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(db_session),
+) -> list[HistoryItemResponse]:
+    records = await get_user_history(session, current_user.id, limit=limit, offset=offset)
+    return [HistoryItemResponse.model_validate(r) for r in records]
 
 
 @router.get(

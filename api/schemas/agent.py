@@ -2,7 +2,7 @@
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class AnalyzeRequest(BaseModel):
@@ -25,3 +25,39 @@ class TaskStatusResponse(BaseModel):
     error: str | None = None
     created_at: str | None = None
     completed_at: str | None = None
+
+
+class HistoryItemResponse(BaseModel):
+    """Serialised view of one AnalysisHistory ORM row for the /history endpoint."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    query: str
+    confidence: Literal["Low", "Medium", "High"]
+    created_at: str
+    market_impacts: list[str]
+    result: dict[str, Any] | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _from_orm(cls, v: Any) -> Any:
+        if not hasattr(v, "report"):
+            return v
+        report: dict[str, Any] = v.report or {}
+        return {
+            "id": str(v.id),
+            "query": v.query,
+            "confidence": v.confidence,
+            "created_at": v.created_at.isoformat(),
+            "market_impacts": report.get("market_impacts", []),
+            "result": {
+                "market_impacts": report.get("market_impacts", []),
+                "risks": report.get("risks", []),
+                "scenarios": report.get("scenarios", []),
+                "investor_takeaway": report.get("investor_takeaway", []),
+                "confidence": v.confidence,
+                "sources": report.get("sources", []),
+                "signals": report.get("signals", {}),
+            },
+        }
