@@ -9,7 +9,7 @@ Design principles:
     re-ingestion of the same document corpus is always idempotent.
   - Semantic search uses raw SQL text() for the pgvector <=> operator; SQLAlchemy's
     ORM query builder doesn't natively know this operator, and raw SQL is clearer here.
-  - Password hashing uses passlib/bcrypt — never store or compare plaintext passwords.
+  - Password hashing uses bcrypt directly — never store or compare plaintext passwords.
   - All public functions are async; none block the event loop.
 """
 
@@ -18,7 +18,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from passlib.context import CryptContext
+import bcrypt as _bcrypt
 from sqlalchemy import delete, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,23 +27,18 @@ from georisk_agent.db.models import AnalysisHistory, GeopoliticalEmbedding, User
 
 logger = logging.getLogger(__name__)
 
-# bcrypt with 12 rounds is the current industry standard for password hashing.
-# Increase rounds on hardware that can afford the extra latency (each +1 doubles cost).
-_pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12)
-
-
 # =============================================================================
 # Password utilities (stateless — no session needed)
 # =============================================================================
 
 def hash_password(plaintext: str) -> str:
-    """Return a bcrypt hash of the given password. Never store plaintext."""
-    return _pwd_ctx.hash(plaintext)
+    """Return a bcrypt hash (12 rounds). Never store plaintext."""
+    return _bcrypt.hashpw(plaintext.encode(), _bcrypt.gensalt(rounds=12)).decode()
 
 
 def verify_password(plaintext: str, hashed: str) -> bool:
     """Return True iff plaintext matches the stored bcrypt hash."""
-    return _pwd_ctx.verify(plaintext, hashed)
+    return _bcrypt.checkpw(plaintext.encode(), hashed.encode())
 
 
 # =============================================================================
@@ -96,9 +91,8 @@ async def authenticate_user(
     """
     user = await get_user_by_email(session, email)
     if user is None:
-        # Perform a dummy verify to normalise response time and avoid
-        # user-enumeration via timing side-channel.
-        _pwd_ctx.dummy_verify()
+        # Dummy verify to normalise response time and prevent user-enumeration.
+        _bcrypt.checkpw(b"dummy", _bcrypt.hashpw(b"dummy", _bcrypt.gensalt()))
         return None
     if not verify_password(password_plaintext, user.password_hash):
         return None
