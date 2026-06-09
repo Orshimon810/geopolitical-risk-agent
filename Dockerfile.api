@@ -1,0 +1,29 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
+WORKDIR /app
+
+# System deps needed to compile some Python packages (e.g. asyncpg, bcrypt)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Python dependencies before copying application code so that this
+# layer is cached and only invalidated when pyproject.toml changes.
+COPY pyproject.toml .
+COPY src ./src
+
+RUN pip install --upgrade pip && pip install .
+
+# Copy the rest of the application
+COPY api ./api
+COPY scripts ./scripts
+
+EXPOSE 8000
+
+# Default command starts the API server.
+# Override with "celery -A api.worker.celery_app worker ..." for the worker service.
+CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -5,14 +5,19 @@ run_geopolitical_agent_task
   - Runs the full LangGraph pipeline (Planner → RAG → Signals → Analysis).
   - Writes real-time status updates (PENDING → PROCESSING → SUCCESS/FAILED)
     into Redis so the /agent/tasks/{task_id} endpoint can be polled.
+  - After SUCCESS, persists the result to the analysis_history DB table.
   - Uses the synchronous redis client because Celery task functions are
     synchronous; the LangGraph graph itself bridges to async DB calls via the
     background event-loop thread already set up in rag/retriever.py.
 """
 
+import asyncio
 import json
 import logging
+import ssl
+import uuid
 from datetime import datetime, timezone
+from typing import Any
 
 import redis as sync_redis
 
@@ -38,6 +43,51 @@ def _patch_task_state(r: sync_redis.Redis, task_id: str, patch: dict) -> None:
     state = json.loads(raw) if raw else {}
     state.update(patch)
     r.setex(f"task:{task_id}", _TASK_TTL_SECONDS, json.dumps(state))
+
+
+def _persist_analysis(*, user_id: str, query: str, result: dict[str, Any]) -> None:
+    """
+    Persist a completed analysis to the DB.
+
+    Runs asyncio.run() inside a dedicated ThreadPoolExecutor thread so it always
+    gets a loop-free context — Celery 5 may have an event loop running in the main
+    worker thread, and calling asyncio.run() there raises "This event loop is
+    already running".
+    """
+    import concurrent.futures
+    from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+    from georisk_agent.db.dal import save_analysis
+
+    async def _run() -> None:
+        ssl_ctx = ssl.create_default_context()
+        engine = create_async_engine(
+            settings.database_url,
+            pool_size=1,
+            max_overflow=0,
+            connect_args={"ssl": ssl_ctx},
+        )
+        try:
+            factory = async_sessionmaker(
+                bind=engine,
+                class_=AsyncSession,
+                expire_on_commit=False,
+                autoflush=False,
+            )
+            async with factory() as session:
+                await save_analysis(
+                    session,
+                    user_id=uuid.UUID(user_id) if user_id else None,
+                    query=query,
+                    report=result,
+                    confidence=result["confidence"],
+                )
+                await session.commit()
+        finally:
+            await engine.dispose()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(asyncio.run, _run())
+        future.result(timeout=60)
 
 
 @celery_app.task(bind=True, name="tasks.run_geopolitical_agent")
@@ -85,6 +135,14 @@ def run_geopolitical_agent_task(self, query: str, user_id: str) -> dict:
             "completed_at": datetime.now(timezone.utc).isoformat(),
         })
         logger.info("Task %s SUCCESS", task_id)
+
+        # Persist to DB (non-fatal if it fails — Redis state is already written)
+        try:
+            _persist_analysis(user_id=user_id, query=query, result=result)
+            logger.info("Task %s persisted to analysis_history", task_id)
+        except Exception as persist_exc:
+            logger.warning("Task %s DB persist failed (non-fatal): %s", task_id, persist_exc, exc_info=True)
+
         return result
 
     except Exception as exc:
