@@ -84,7 +84,7 @@ export function ResultsDisplay({ result, query }: ResultsDisplayProps) {
       </div>
 
       {/* Market signals */}
-      {result.signals && Object.keys(result.signals).length > 0 && (
+      {result.signals && (result.signals.market_data || result.signals.countries) && (
         <MarketSignals signals={result.signals} />
       )}
 
