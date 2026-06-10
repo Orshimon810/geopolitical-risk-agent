@@ -3,11 +3,10 @@
 import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { TrendingUp, Loader2 } from "lucide-react";
+import { Loader2, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { useAuth } from "@/context/AuthContext";
 
 function LoginForm() {
@@ -16,11 +15,9 @@ function LoginForm() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
-  const sessionMessage =
-    searchParams.get("reason") === "session_expired"
-      ? "Your session expired. Please log in again."
-      : null;
   const [loading, setLoading] = useState(false);
+
+  const sessionExpired = searchParams.get("reason") === "session_expired";
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -29,33 +26,59 @@ function LoginForm() {
     try {
       await login(email, password);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Login failed");
+      setError(err instanceof Error ? err.message : "Authentication failed");
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <Card className="border-slate-800 bg-slate-900/80 backdrop-blur">
-      <CardHeader className="pb-2 text-center">
-        <div className="flex justify-center mb-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-600">
-            <TrendingUp className="h-5 w-5 text-white" />
+    <div className="terminal-window">
+      {/* Terminal chrome */}
+      <div className="terminal-titlebar">
+        <div className="terminal-dot bg-rose-500/70" />
+        <div className="terminal-dot bg-amber-500/70" />
+        <div className="terminal-dot bg-emerald-500/70" />
+        <span className="ml-2 flex-1 text-[10px] text-slate-600 data-mono">georisk-auth — bash</span>
+        <span className="text-[10px] text-slate-700 data-mono">v1.0</span>
+      </div>
+
+      {/* Brand header */}
+      <div className="px-6 pt-6 pb-5 border-b border-slate-800">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-amber-600/30 bg-amber-500/8">
+            <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5 text-amber-400" stroke="currentColor" strokeWidth="1.5">
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 0 0 8.716-6.747M12 21a9.004 9.004 0 0 1-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 0 1 7.843 4.582M12 3a8.997 8.997 0 0 0-7.843 4.582m15.686 0A11.953 11.953 0 0 1 12 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0 1 21 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0 1 12 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 0 1 3 12c0-1.605.42-3.113 1.157-4.418" />
+            </svg>
+          </div>
+          <div>
+            <h1 className="text-sm font-bold text-slate-100 tracking-tight data-mono">
+              GeoRisk<span className="text-amber-400">_</span>AI
+            </h1>
+            <p className="text-[10px] text-slate-600 data-mono uppercase tracking-widest">
+              Intelligence Platform
+            </p>
           </div>
         </div>
-        <h1 className="text-xl font-bold text-slate-50">GeoRisk AI</h1>
-        <p className="text-xs text-slate-500 mt-0.5">Sign in to your workspace</p>
-      </CardHeader>
+        <p className="text-[11px] text-slate-500 leading-relaxed">
+          Institutional-grade geopolitical risk analysis for investment professionals.
+        </p>
+      </div>
 
-      <CardContent className="space-y-4 pt-4">
-        {sessionMessage && (
-          <div className="rounded-md border border-amber-700 bg-amber-950/40 px-3 py-2 text-xs text-amber-400">
-            {sessionMessage}
+      {/* Form */}
+      <div className="px-6 py-5 space-y-4">
+        {sessionExpired && (
+          <div className="rounded border border-amber-800/40 bg-amber-950/20 px-3 py-2.5 text-[11px] text-amber-500 data-mono flex items-center gap-2">
+            <span className="text-amber-400">⚠</span>
+            Session expired — re-authenticate to continue.
           </div>
         )}
+
         <form onSubmit={handleSubmit} className="space-y-3">
           <div className="space-y-1.5">
-            <Label htmlFor="email">Email</Label>
+            <Label htmlFor="email" className="text-[10px] uppercase tracking-widest text-slate-600 data-mono">
+              Email
+            </Label>
             <Input
               id="email"
               type="email"
@@ -66,11 +89,17 @@ function LoginForm() {
               autoComplete="email"
             />
           </div>
+
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
-              <Label htmlFor="password">Password</Label>
-              <Link href="/forgot-password" className="text-xs text-blue-400 hover:text-blue-300">
-                Forgot password?
+              <Label htmlFor="password" className="text-[10px] uppercase tracking-widest text-slate-600 data-mono">
+                Password
+              </Label>
+              <Link
+                href="/forgot-password"
+                className="text-[10px] text-amber-600/80 hover:text-amber-400 transition-colors data-mono"
+              >
+                forgot?
               </Link>
             </div>
             <Input
@@ -85,37 +114,33 @@ function LoginForm() {
           </div>
 
           {error && (
-            <div className="rounded-md border border-rose-800 bg-rose-950/40 px-3 py-2 text-xs text-rose-400">
-              {error}
+            <div className="rounded border border-rose-800/40 bg-rose-950/20 px-3 py-2 text-[11px] text-rose-400 data-mono flex items-center gap-2">
+              <span>✗</span> {error}
             </div>
           )}
 
-          <Button type="submit" className="w-full" disabled={loading}>
-            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Sign In"}
+          <Button type="submit" className="w-full gap-2 mt-1" disabled={loading}>
+            {loading ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <>
+                <ChevronRight className="h-4 w-4" />
+                Authenticate
+              </>
+            )}
           </Button>
         </form>
 
-        <div className="relative">
-          <div className="absolute inset-0 flex items-center">
-            <span className="w-full border-t border-slate-800" />
-          </div>
-          <div className="relative flex justify-center text-xs">
-            <span className="bg-slate-900 px-2 text-slate-600">or continue with</span>
-          </div>
+        <div className="pt-1 border-t border-slate-800/60">
+          <p className="text-center text-[11px] text-slate-600 data-mono">
+            no account?{" "}
+            <Link href="/register" className="text-amber-500 hover:text-amber-400 transition-colors">
+              request access →
+            </Link>
+          </p>
         </div>
-
-        <Button variant="outline" className="w-full opacity-50 cursor-not-allowed" disabled>
-          SSO / OAuth (coming soon)
-        </Button>
-
-        <p className="text-center text-xs text-slate-600">
-          No account?{" "}
-          <Link href="/register" className="text-blue-400 hover:text-blue-300">
-            Create one
-          </Link>
-        </p>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }
 

@@ -3,12 +3,17 @@
 import { Suspense, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { TrendingUp, Loader2 } from "lucide-react";
+import { Loader2, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { api } from "@/lib/api";
+
+const PW_HINTS = [
+  { label: "8+ characters",        test: (pw: string) => pw.length >= 8 },
+  { label: "one uppercase letter", test: (pw: string) => /[A-Z]/.test(pw) },
+  { label: "one number",           test: (pw: string) => /\d/.test(pw) },
+];
 
 function validatePassword(pw: string): string | null {
   if (pw.length < 8) return "Password must be at least 8 characters";
@@ -21,31 +26,19 @@ function ResetPasswordForm() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const token = searchParams.get("token") ?? "";
-
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
 
-  const pwHints = [
-    { label: "8+ characters", ok: password.length >= 8 },
-    { label: "One uppercase letter", ok: /[A-Z]/.test(password) },
-    { label: "One number", ok: /\d/.test(password) },
-  ];
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
-
-    if (!token) {
-      setError("Invalid reset link. Please request a new one.");
-      return;
-    }
+    if (!token) { setError("Invalid reset link. Please request a new one."); return; }
     const pwError = validatePassword(password);
     if (pwError) { setError(pwError); return; }
     if (password !== confirm) { setError("Passwords do not match."); return; }
-
     setLoading(true);
     try {
       await api.resetPassword(token, password);
@@ -60,9 +53,9 @@ function ResetPasswordForm() {
 
   if (!token) {
     return (
-      <div className="space-y-4">
-        <div className="rounded-md border border-rose-800 bg-rose-950/40 px-3 py-2 text-xs text-rose-400">
-          Invalid or missing reset token. Please request a new link.
+      <div className="space-y-3">
+        <div className="rounded border border-rose-800/40 bg-rose-950/20 px-3 py-2 text-[11px] text-rose-400 data-mono">
+          ✗ Invalid or missing reset token. Please request a new link.
         </div>
         <Link href="/forgot-password">
           <Button variant="outline" className="w-full">Request New Link</Button>
@@ -73,8 +66,9 @@ function ResetPasswordForm() {
 
   if (success) {
     return (
-      <div className="rounded-md border border-emerald-800 bg-emerald-950/40 px-3 py-3 text-xs text-emerald-400">
-        Password updated successfully. Redirecting to sign in…
+      <div className="rounded border border-emerald-800/40 bg-emerald-950/20 px-3 py-3 text-[11px] text-emerald-400 data-mono space-y-1">
+        <p>✓ Password updated successfully.</p>
+        <p className="text-slate-500">Redirecting to sign in…</p>
       </div>
     );
   }
@@ -82,7 +76,9 @@ function ResetPasswordForm() {
   return (
     <form onSubmit={handleSubmit} className="space-y-3">
       <div className="space-y-1.5">
-        <Label htmlFor="password">New Password</Label>
+        <Label htmlFor="password" className="text-[10px] uppercase tracking-widest text-slate-600 data-mono">
+          New Password
+        </Label>
         <Input
           id="password"
           type="password"
@@ -93,21 +89,24 @@ function ResetPasswordForm() {
           autoComplete="new-password"
         />
         {password.length > 0 && (
-          <ul className="space-y-0.5 mt-1">
-            {pwHints.map(({ label, ok }) => (
-              <li
-                key={label}
-                className={`text-xs flex items-center gap-1.5 ${ok ? "text-emerald-400" : "text-slate-500"}`}
-              >
-                <span>{ok ? "✓" : "○"}</span>
-                {label}
-              </li>
-            ))}
+          <ul className="space-y-0.5 pt-1">
+            {PW_HINTS.map(({ label, test }) => {
+              const ok = test(password);
+              return (
+                <li key={label} className={`text-[10px] flex items-center gap-1.5 data-mono ${ok ? "text-emerald-400" : "text-slate-600"}`}>
+                  <span>{ok ? "✓" : "○"}</span>
+                  {label}
+                </li>
+              );
+            })}
           </ul>
         )}
       </div>
+
       <div className="space-y-1.5">
-        <Label htmlFor="confirm">Confirm Password</Label>
+        <Label htmlFor="confirm" className="text-[10px] uppercase tracking-widest text-slate-600 data-mono">
+          Confirm Password
+        </Label>
         <Input
           id="confirm"
           type="password"
@@ -120,13 +119,20 @@ function ResetPasswordForm() {
       </div>
 
       {error && (
-        <div className="rounded-md border border-rose-800 bg-rose-950/40 px-3 py-2 text-xs text-rose-400">
-          {error}
+        <div className="rounded border border-rose-800/40 bg-rose-950/20 px-3 py-2 text-[11px] text-rose-400 data-mono flex items-center gap-2">
+          <span>✗</span> {error}
         </div>
       )}
 
-      <Button type="submit" className="w-full" disabled={loading}>
-        {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Set New Password"}
+      <Button type="submit" className="w-full gap-2" disabled={loading}>
+        {loading ? (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        ) : (
+          <>
+            <ChevronRight className="h-4 w-4" />
+            Set New Password
+          </>
+        )}
       </Button>
     </form>
   );
@@ -134,21 +140,22 @@ function ResetPasswordForm() {
 
 export default function ResetPasswordPage() {
   return (
-    <Card className="border-slate-800 bg-slate-900/80 backdrop-blur">
-      <CardHeader className="pb-2 text-center">
-        <div className="flex justify-center mb-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-600">
-            <TrendingUp className="h-5 w-5 text-white" />
-          </div>
-        </div>
-        <h1 className="text-xl font-bold text-slate-50">Set New Password</h1>
-        <p className="text-xs text-slate-500 mt-0.5">Choose a strong password for your account</p>
-      </CardHeader>
-      <CardContent className="space-y-4 pt-4">
-        <Suspense fallback={<div className="text-xs text-slate-500 text-center">Loading…</div>}>
+    <div className="terminal-window">
+      <div className="terminal-titlebar">
+        <div className="terminal-dot bg-rose-500/70" />
+        <div className="terminal-dot bg-amber-500/70" />
+        <div className="terminal-dot bg-emerald-500/70" />
+        <span className="ml-2 flex-1 text-[10px] text-slate-600 data-mono">georisk-auth — set-password</span>
+      </div>
+      <div className="px-6 pt-6 pb-4 border-b border-slate-800">
+        <h1 className="text-sm font-bold text-slate-100 tracking-tight data-mono mb-0.5">Set New Password</h1>
+        <p className="text-[11px] text-slate-500">Choose a strong password for your account.</p>
+      </div>
+      <div className="px-6 py-5">
+        <Suspense fallback={<div className="text-[11px] text-slate-500 data-mono">Loading…</div>}>
           <ResetPasswordForm />
         </Suspense>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }
