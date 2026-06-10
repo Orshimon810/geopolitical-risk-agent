@@ -31,6 +31,9 @@ class Settings(BaseModel):
     broker_url: str = os.getenv("BROKER_URL", "redis://localhost:6379/1")
     result_backend: str = os.getenv("RESULT_BACKEND", "redis://localhost:6379/2")
 
+    # --- Query result cache ---
+    query_cache_ttl_seconds: int = int(os.getenv("QUERY_CACHE_TTL", "7200"))
+
     # --- Email (password reset via Resend API — https://resend.com) ---
     # Leave RESEND_API_KEY empty to use dev mode: reset links are logged instead of sent.
     resend_api_key: str = os.getenv("RESEND_API_KEY", "")

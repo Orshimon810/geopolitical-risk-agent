@@ -21,6 +21,7 @@ from typing import Any
 
 import redis as sync_redis
 
+from api.core.query_cache import set_cached_result_sync
 from api.worker.celery_app import celery_app
 from georisk_agent.app.config import settings
 
@@ -133,8 +134,12 @@ def run_geopolitical_agent_task(self, query: str, user_id: str) -> dict:
             "status": "SUCCESS",
             "result": result,
             "completed_at": datetime.now(timezone.utc).isoformat(),
+            "cached": False,
         })
         logger.info("Task %s SUCCESS", task_id)
+
+        set_cached_result_sync(r, query, result, settings.query_cache_ttl_seconds)
+        logger.info("Task %s cached (TTL=%ds)", task_id, settings.query_cache_ttl_seconds)
 
         # Persist to DB (non-fatal if it fails — Redis state is already written)
         try:

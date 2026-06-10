@@ -23,10 +23,12 @@ import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.core.query_cache import get_cached_result
 from api.core.redis_client import get_redis
 from api.dependencies import check_rate_limit, db_session, get_current_user
 from api.schemas.agent import AnalyzeRequest, HistoryItemResponse, TaskCreatedResponse, TaskStatusResponse
 from api.worker.tasks import run_geopolitical_agent_task
+from georisk_agent.app.config import settings
 from georisk_agent.db.dal import delete_analysis_by_id, get_user_history
 from georisk_agent.db.models import User
 
@@ -48,20 +50,34 @@ async def analyze(
 ) -> TaskCreatedResponse:
     """
     Workflow:
-    1. Generate a stable task_id (UUID4).
-    2. Write PENDING status to Redis *before* dispatching — prevents a race where
-       the worker updates state before the endpoint has written the initial record.
-    3. Dispatch the Celery task using the pre-generated task_id.
-    4. Return 202 Accepted with the task_id immediately (non-blocking).
+    1. Check the query result cache — if hit, write a synthetic SUCCESS state and
+       return immediately (no Celery task dispatched).
+    2. On cache miss: generate a task_id, write PENDING to Redis, dispatch Celery.
+    3. Return 202 Accepted with the task_id (client polls /tasks/{task_id} as normal).
     """
+    now = datetime.now(timezone.utc).isoformat()
     task_id = str(uuid.uuid4())
+
+    cached = await get_cached_result(redis_client, body.query)
+    if cached is not None:
+        hit_state = {
+            "status": "SUCCESS",
+            "result": cached,
+            "error": None,
+            "created_at": now,
+            "completed_at": now,
+            "cached": True,
+        }
+        await redis_client.setex(f"task:{task_id}", _TASK_TTL_SECONDS, json.dumps(hit_state))
+        return TaskCreatedResponse(task_id=task_id)
 
     initial_state = {
         "status": "PENDING",
         "result": None,
         "error": None,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": now,
         "completed_at": None,
+        "cached": False,
     }
     await redis_client.setex(f"task:{task_id}", _TASK_TTL_SECONDS, json.dumps(initial_state))
 
