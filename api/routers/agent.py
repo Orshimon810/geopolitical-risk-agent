@@ -29,7 +29,6 @@ from api.core.redis_client import get_redis
 from api.dependencies import check_rate_limit, db_session, get_current_user
 from api.schemas.agent import AnalyzeRequest, HistoryItemResponse, TaskCreatedResponse, TaskStatusResponse
 from api.worker.tasks import run_geopolitical_agent_task
-from georisk_agent.app.config import settings
 from georisk_agent.db.dal import delete_analysis_by_id, get_user_history
 from georisk_agent.db.models import User
 
