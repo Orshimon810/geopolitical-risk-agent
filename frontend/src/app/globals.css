@@ -32,9 +32,41 @@
   color-scheme: dark;
 }
 
+/* ── Light mode — inverts the slate scale so all components adapt automatically ── */
+html.light {
+  color-scheme: light;
+  --color-slate-950: #fafafa;
+  --color-slate-900: #f5f5f5;
+  --color-slate-800: #e8e8e8;
+  --color-slate-700: #d4d4d4;
+  --color-slate-600: #6b6b6b;
+  --color-slate-500: #525252;
+  --color-slate-400: #404040;
+  --color-slate-300: #262626;
+  --color-slate-200: #1a1a1a;
+  --color-slate-100: #111111;
+  --color-slate-50:  #080808;
+}
+
+/* Light mode — terminal chrome overrides */
+html.light .terminal-window {
+  background: #f8f8f8;
+  border-color: #e0e0e0;
+  box-shadow: 0 0 0 1px #ececec, 0 25px 50px -12px rgba(0,0,0,0.08);
+}
+html.light .terminal-titlebar {
+  background: #efefef;
+  border-bottom-color: #e0e0e0;
+}
+
+/* Light mode — section header trailing rule */
+html.light .section-header::after {
+  background: linear-gradient(to right, #e0e0e0, transparent);
+}
+
 body {
-  background-color: #080808;
-  color: #e5e5e5;
+  background-color: var(--color-slate-950);
+  color: var(--color-slate-100);
   font-family: var(--font-inter, ui-sans-serif, system-ui, -apple-system, sans-serif);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -48,9 +80,9 @@ body {
 
 /* ── Scrollbar ── */
 ::-webkit-scrollbar { width: 4px; height: 4px; }
-::-webkit-scrollbar-track { background: #0a0a0a; }
-::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 2px; }
-::-webkit-scrollbar-thumb:hover { background: #404040; }
+::-webkit-scrollbar-track { background: var(--color-slate-950); }
+::-webkit-scrollbar-thumb { background: var(--color-slate-800); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-slate-700); }
 
 /* ── Bloomberg section header with trailing rule ── */
 .section-header {
@@ -115,13 +147,13 @@ body {
 
 /* ── Markdown prose — Bloomberg style ── */
 .prose {
-  color: #a3a3a3;
+  color: var(--color-slate-500);
   line-height: 1.75;
 }
 .prose h1,
 .prose h2,
 .prose h3 {
-  color: #f5f5f5;
+  color: var(--color-slate-100);
   font-weight: 600;
   margin-top: 1.5em;
   margin-bottom: 0.5em;
@@ -159,7 +191,7 @@ body {
   top: 0.35em;
   font-family: var(--font-mono, monospace);
 }
-.prose strong { color: #f5f5f5; font-weight: 600; }
+.prose strong { color: var(--color-slate-100); font-weight: 600; }
 .prose code {
   background: #1a1a1a;
   padding: 0.15em 0.4em;
