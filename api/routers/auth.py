@@ -7,7 +7,9 @@ Login issues a JWT access token on valid credentials.
 Forgot/reset-password implement a one-time, time-limited token flow.
 """
 
+import asyncio
 from datetime import datetime, timezone
+from functools import partial
 
 import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -157,7 +159,10 @@ async def forgot_password(
         raw_token = await create_reset_token(session, user.id)
         reset_link = f"{settings.frontend_url}/reset-password?token={raw_token}"
         try:
-            send_password_reset_email(user.email, reset_link)
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None, partial(send_password_reset_email, user.email, reset_link)
+            )
         except Exception:
             pass  # log internally; never surface email errors to the caller
     # Always return the same message to prevent email enumeration.
