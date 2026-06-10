@@ -1,8 +1,10 @@
 """
-Authentication router — /auth/register and /auth/login.
+Authentication router — /auth/register, /auth/login, /auth/forgot-password,
+/auth/reset-password.
 
 Registration hashes the password via bcrypt (handled inside dal.create_user).
 Login issues a JWT access token on valid credentials.
+Forgot/reset-password implement a one-time, time-limited token flow.
 """
 
 from datetime import datetime, timezone
@@ -12,11 +14,28 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from api.core.email import send_password_reset_email
 from api.core.redis_client import get_redis
 from api.core.security import create_access_token
 from api.dependencies import db_session
-from api.schemas.auth import LoginRequest, RegisterRequest, TokenResponse, UserResponse
-from georisk_agent.db.dal import authenticate_user, create_user, get_user_by_email
+from api.schemas.auth import (
+    ForgotPasswordRequest,
+    LoginRequest,
+    MessageResponse,
+    RegisterRequest,
+    ResetPasswordRequest,
+    TokenResponse,
+    UserResponse,
+)
+from georisk_agent.app.config import settings
+from georisk_agent.db.dal import (
+    authenticate_user,
+    consume_reset_token,
+    create_reset_token,
+    create_user,
+    get_user_by_email,
+    get_valid_reset_token,
+)
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -71,7 +90,6 @@ async def register(
     redis_client: aioredis.Redis = Depends(get_redis),
 ) -> UserResponse:
     await _check_register_rate(request, redis_client)
-    # Pre-check to give a clean error instead of relying on the DB constraint alone.
     existing = await get_user_by_email(session, body.email)
     if existing is not None:
         raise HTTPException(
@@ -87,8 +105,6 @@ async def register(
             full_name=body.full_name,
         )
     except IntegrityError:
-        # Race-condition safety net: another request registered the same email
-        # between our SELECT and INSERT.
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="An account with this email already exists.",
@@ -117,8 +133,6 @@ async def login(
     await _check_login_rate(request, redis_client)
     user = await authenticate_user(session, body.email, body.password)
     if user is None:
-        # Use the same generic message for missing user and wrong password to
-        # prevent user-enumeration via distinct error messages.
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect email or password.",
@@ -127,3 +141,45 @@ async def login(
 
     token = create_access_token({"sub": str(user.id)})
     return TokenResponse(access_token=token)
+
+
+@router.post(
+    "/forgot-password",
+    response_model=MessageResponse,
+    summary="Request a password reset email",
+)
+async def forgot_password(
+    body: ForgotPasswordRequest,
+    session: AsyncSession = Depends(db_session),
+) -> MessageResponse:
+    user = await get_user_by_email(session, body.email)
+    if user is not None:
+        raw_token = await create_reset_token(session, user.id)
+        reset_link = f"{settings.frontend_url}/reset-password?token={raw_token}"
+        try:
+            send_password_reset_email(user.email, reset_link)
+        except Exception:
+            pass  # log internally; never surface email errors to the caller
+    # Always return the same message to prevent email enumeration.
+    return MessageResponse(
+        message="If an account exists for this email, a reset link has been sent."
+    )
+
+
+@router.post(
+    "/reset-password",
+    response_model=MessageResponse,
+    summary="Set a new password using a reset token",
+)
+async def reset_password(
+    body: ResetPasswordRequest,
+    session: AsyncSession = Depends(db_session),
+) -> MessageResponse:
+    token_record = await get_valid_reset_token(session, body.token)
+    if token_record is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Reset link is invalid or has expired.",
+        )
+    await consume_reset_token(session, token_record, body.new_password)
+    return MessageResponse(message="Password updated successfully. You can now log in.")

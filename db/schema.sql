@@ -160,3 +160,26 @@ CREATE INDEX IF NOT EXISTS idx_history_report_gin
 COMMENT ON TABLE  analysis_history          IS 'Full investment-grade analysis reports produced by the LangGraph pipeline.';
 COMMENT ON COLUMN analysis_history.report   IS 'AnalysisOutput.model_dump() — contains market_impacts, risks, scenarios, etc.';
 COMMENT ON COLUMN analysis_history.user_id  IS 'NULL for anonymous invocations (CLI, evaluation suite).';
+
+
+-- ============================================================================
+-- TABLE: password_reset_tokens
+-- One-time tokens for the forgot-password flow. Expires after 1 hour.
+-- Any unused token for a user is replaced when a new request is made.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id     UUID        NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    token       TEXT        NOT NULL,
+    expires_at  TIMESTAMPTZ NOT NULL,
+    used_at     TIMESTAMPTZ,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT uq_reset_token UNIQUE (token)
+);
+
+CREATE INDEX IF NOT EXISTS idx_reset_tokens_user
+    ON password_reset_tokens (user_id);
+
+COMMENT ON TABLE  password_reset_tokens            IS 'One-time password reset tokens; expire 1 hour after creation.';
+COMMENT ON COLUMN password_reset_tokens.used_at    IS 'Set when the token is consumed. NULL = still valid (if not expired).';

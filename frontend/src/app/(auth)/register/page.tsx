@@ -9,6 +9,13 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { useAuth } from "@/context/AuthContext";
 
+function validatePassword(pw: string): string | null {
+  if (pw.length < 8) return "Password must be at least 8 characters";
+  if (!/[A-Z]/.test(pw)) return "Password must contain at least one uppercase letter";
+  if (!/\d/.test(pw)) return "Password must contain at least one number";
+  return null;
+}
+
 export default function RegisterPage() {
   const { register } = useAuth();
   const [fullName, setFullName] = useState("");
@@ -20,8 +27,9 @@ export default function RegisterPage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
-    if (password.length < 8) {
-      setError("Password must be at least 8 characters");
+    const pwError = validatePassword(password);
+    if (pwError) {
+      setError(pwError);
       return;
     }
     setLoading(true);
@@ -33,6 +41,12 @@ export default function RegisterPage() {
       setLoading(false);
     }
   };
+
+  const pwHints = [
+    { label: "8+ characters", ok: password.length >= 8 },
+    { label: "One uppercase letter", ok: /[A-Z]/.test(password) },
+    { label: "One number", ok: /\d/.test(password) },
+  ];
 
   return (
     <Card className="border-slate-800 bg-slate-900/80 backdrop-blur">
@@ -82,6 +96,19 @@ export default function RegisterPage() {
               required
               autoComplete="new-password"
             />
+            {password.length > 0 && (
+              <ul className="space-y-0.5 mt-1">
+                {pwHints.map(({ label, ok }) => (
+                  <li
+                    key={label}
+                    className={`text-xs flex items-center gap-1.5 ${ok ? "text-emerald-400" : "text-slate-500"}`}
+                  >
+                    <span>{ok ? "✓" : "○"}</span>
+                    {label}
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
 
           {error && (
