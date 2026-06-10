@@ -13,6 +13,7 @@ const PAGE_TITLES: Record<string, string> = {
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = useState(false);
+  const [mobileOpen, setMobileOpen] = useState(false);
   const { isAuthenticated, isLoading } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
@@ -23,10 +24,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     }
   }, [isAuthenticated, isLoading, router]);
 
+  // Close mobile sidebar on route change
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname]);
+
   if (isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-slate-950">
-        <div className="h-5 w-5 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
+        <div className="h-5 w-5 rounded-full border-2 border-amber-500 border-t-transparent animate-spin" />
       </div>
     );
   }
@@ -37,10 +43,18 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="flex h-screen overflow-hidden bg-slate-950">
-      <Sidebar collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} />
-      <div className="flex flex-1 flex-col overflow-hidden">
-        <Navbar title={title} />
-        <main className="flex-1 overflow-y-auto p-5">{children}</main>
+      <Sidebar
+        collapsed={collapsed}
+        onToggle={() => setCollapsed((c) => !c)}
+        mobileOpen={mobileOpen}
+        onMobileClose={() => setMobileOpen(false)}
+      />
+      <div className="flex flex-1 flex-col overflow-hidden min-w-0">
+        <Navbar
+          title={title}
+          onMobileSidebarOpen={() => setMobileOpen(true)}
+        />
+        <main className="flex-1 overflow-y-auto p-4 md:p-5">{children}</main>
       </div>
     </div>
   );
