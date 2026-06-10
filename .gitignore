@@ -1,3 +1,9 @@
+# Node / Next.js
+node_modules/
+frontend/.next/
+frontend/out/
+frontend/.env.local
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -195,6 +201,7 @@ cython_debug/
 
 # Local notes (not for version control)
 MISSING_FEATURES.txt
+FEATURE_*.txt
 
 # MCP config (contains API keys)
 .mcp.json

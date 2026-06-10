@@ -7,7 +7,15 @@ function getToken(): string | null {
   return localStorage.getItem("georisk_token");
 }
 
-async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> {
+function setToken(token: string): void {
+  if (typeof window !== "undefined") localStorage.setItem("georisk_token", token);
+}
+
+function clearToken(): void {
+  if (typeof window !== "undefined") localStorage.removeItem("georisk_token");
+}
+
+async function apiFetch<T>(path: string, options: RequestInit = {}, _isRetry = false): Promise<T> {
   const token = getToken();
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
@@ -15,15 +23,29 @@ async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> 
   };
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers,
+    credentials: "include",  // send httpOnly refresh cookie on every request
+  });
 
-  if (res.status === 401 && !path.startsWith("/auth/")) {
-    // Token expired on an authenticated route — clear it and redirect to login
-    if (typeof window !== "undefined") {
-      localStorage.removeItem("georisk_token");
-      window.location.href = "/login";
+  if (res.status === 401 && !path.startsWith("/auth/") && !_isRetry) {
+    // Access token expired — attempt a silent refresh before giving up
+    try {
+      const refreshed = await apiFetch<{ access_token: string }>("/auth/refresh", {
+        method: "POST",
+      }, true);
+      setToken(refreshed.access_token);
+      // Retry the original request once with the new token
+      return apiFetch<T>(path, options, true);
+    } catch {
+      // Refresh failed (token revoked / expired) — redirect to login with reason
+      clearToken();
+      if (typeof window !== "undefined") {
+        window.location.href = "/login?reason=session_expired";
+      }
+      throw new Error("Session expired. Please log in again.");
     }
-    throw new Error("Session expired. Please log in again.");
   }
 
   if (!res.ok) {
@@ -83,5 +105,9 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ token, new_password: newPassword }),
     });
+  },
+
+  logout() {
+    return apiFetch<{ message: string }>("/auth/logout", { method: "POST" });
   },
 };
