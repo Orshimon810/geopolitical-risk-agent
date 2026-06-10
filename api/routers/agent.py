@@ -20,8 +20,6 @@ import logging
 import uuid
 from datetime import datetime, timezone
 
-logger = logging.getLogger(__name__)
-
 import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,6 +32,8 @@ from api.worker.tasks import run_geopolitical_agent_task
 from georisk_agent.app.config import settings
 from georisk_agent.db.dal import delete_analysis_by_id, get_user_history
 from georisk_agent.db.models import User
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agent", tags=["Agent"])
 
