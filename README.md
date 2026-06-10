@@ -1,268 +1,230 @@
-# 🌍 Geopolitical Risk & Markets Agent
+# Geopolitical Risk & Markets Agent
 
-An **agentic AI system** for geopolitical risk analysis, combining  
-**retrieval-augmented generation (RAG)**, **context-aware external macroeconomic signals**,  
-and a lightweight **interactive UI**.
+An agentic AI system for geopolitical risk analysis, combining retrieval-augmented generation (RAG), context-aware macroeconomic signals, and a production-grade REST API with a Next.js frontend.
 
 ---
 
-## 📌 Overview
+## Overview
 
-This project implements an end-to-end **agentic pipeline** that:
-
-- Decomposes complex geopolitical queries into structured research plans
-- Grounds analysis in a curated document corpus (RAG)
-- Enriches insights with **context-aware external macroeconomic signals** and **live market prices**
-- Produces structured, evidence-backed market impact assessments via a validated Pydantic schema
-
-The system is designed to resemble **internal research tools** used by risk, policy, and strategy teams.
-The system is orchestrated using a **LangGraph-based agent state machine**.
+The system decomposes complex geopolitical queries into structured research plans, grounds analysis in a curated document corpus, enriches insights with live macro signals and market prices, and returns validated structured output — designed to resemble internal research tools used by risk, policy, and strategy teams.
 
 ---
 
-## 🧠 Architecture
+## Architecture
 
-```mermaid
-flowchart TD
-    A[User Query] --> B[Planner Agent]
-    B --> C[RAG Retriever]
-    C --> D[Vector Store]
-    D --> E[External Signals Agent]
-    E --> F[Analysis Agent]
-    F --> G[Structured Output]
 ```
----
-
-## 🤖 Agents
-
-### Planner Agent
-- Breaks the user query into focused research sub-questions
-- Defines analytical scope and relevance
-
-### RAG Research Agent
-- Retrieves relevant document chunks from a vector database
-- Uses a curated corpus (e.g., IMF, World Bank, BIS reports)
-
-### Analysis Agent
-- Uses **LangChain structured output** (`with_structured_output`) with a Pydantic model — guarantees schema-valid responses, no regex parsing
-- Produces six typed fields:
-  - `market_impacts` — asset-level first-movers and transmission channels
-  - `risks` — market mispricing and asymmetric expectations
-  - `scenarios` — base case + escalation with timelines
-  - `investor_takeaway` — actionable recommendations
-  - `confidence` — typed `Low | Medium | High`
-  - `sources` — cited evidence
-- Enforces strict institutional guardrails via prompt discipline
-
-### External Signals Agent
-- Extracts relevant countries from the query context, including region keywords (e.g., "Middle East", "Gulf", "OPEC")
-- Covers 43 countries including full Middle East coverage (SAU, IRN, IRQ, ARE, QAT, etc.)
-- Fetches **World Bank** macro indicators per country:
-  - **Trade (% of GDP)** — all detected countries
-  - **Oil Rents (% of GDP)** — oil-producing countries only
-- Fetches **live Yahoo Finance market prices** — always includes VIX, Brent crude, Gold, and DXY; adds query-specific tickers:
-  - China / Taiwan tensions → FXI (China ETF), TSM (TSMC)
-  - Oil / Russia / Ukraine → NG=F (Natural Gas futures)
-  - EM stress → EEM (EM ETF)
-  - Europe → FEZ (Euro Stoxx 50 ETF)
-- All signals (World Bank + live prices) are injected into the LLM prompt and displayed as metric tiles in the UI
+User Query
+    │
+    ▼
+┌─────────────────────────────────────────────┐
+│              Next.js Frontend               │
+│  Auth pages · Analysis page · History page  │
+└──────────────────┬──────────────────────────┘
+                   │ JWT + REST
+                   ▼
+┌─────────────────────────────────────────────┐
+│             FastAPI REST API                │
+│  /auth  /agent/analyze  /agent/tasks/{id}   │
+│         Redis rate-limit + query cache      │
+└──────────────────┬──────────────────────────┘
+                   │ Celery task dispatch
+                   ▼
+┌─────────────────────────────────────────────┐
+│           LangGraph Pipeline                │
+│                                             │
+│  Planner → RAG Research → Signals → Analysis│
+└─────────┬─────────────┬───────────┬─────────┘
+          │             │           │
+     pgvector       World Bank   Yahoo
+     (Neon)         API          Finance
+```
 
 ---
 
-## 🔑 Configuration
+## Pipeline — Four Nodes
 
-This project uses **OpenAI-compatible LLMs** for planning and analysis.
+### 1. Planner
+Decomposes the user query into 4–6 focused research sub-questions using an LLM at temperature 0.2.
 
-To run the system locally, you must provide an API key via an environment variable.
+### 2. RAG Research
+Retrieves k=3 document chunks per sub-question from a pgvector corpus hosted on Neon (PostgreSQL). Deduplicates evidence by `(source, text)` across the full run.
 
-### Required Environment Variables
+### 3. External Signals
+- Extracts relevant countries via keyword matching — 43 countries plus region aliases (Middle East, Gulf, OPEC, Eastern Europe, etc.)
+- Fetches **World Bank** macro indicators: Trade % of GDP (all countries), Oil Rents % of GDP (oil producers only)
+- Fetches **live Yahoo Finance** prices — always VIX, Brent crude, Gold, DXY; adds query-specific tickers (e.g. FXI/TSM for China–Taiwan, NG=F for Russia/Ukraine, EEM for EM, FEZ for Europe)
+
+### 4. Analysis
+Synthesizes plan + evidence + signals into an `AnalysisOutput` Pydantic model via LangChain `.with_structured_output()`, guaranteeing seven typed fields:
+
+| Field | Description |
+|---|---|
+| `market_impacts` | Asset-level first-movers and transmission channels |
+| `risks` | Market mispricing and asymmetric expectations |
+| `scenarios` | Base case + escalation with timelines |
+| `investor_takeaway` | Actionable recommendations |
+| `confidence` | `Low` / `Medium` / `High` |
+| `sources` | Cited evidence |
+| `reasoning` | Chain-of-thought scratchpad (stored in debug, not shown to users) |
+
+---
+
+## API
+
+```
+POST /auth/register        → create user (bcrypt-hashed password)
+POST /auth/login           → JWT access token + httpOnly refresh cookie
+POST /auth/refresh         → silent token rotation via refresh cookie
+POST /auth/logout          → revoke refresh token, clear cookie
+POST /auth/forgot-password → email reset link via Resend API
+POST /auth/reset-password  → consume token, set new password
+
+POST /agent/analyze        → 202 Accepted + task_id (Celery dispatch)
+GET  /agent/tasks/{id}     → poll task state (PENDING → PROCESSING → SUCCESS/FAILED)
+GET  /agent/history        → paginated analysis history for the authenticated user
+DELETE /agent/history/{id} → delete a single history entry
+GET  /health               → liveness probe
+```
+
+**Request lifecycle:** Client calls `POST /agent/analyze` with a Bearer token → rate-limit check → cache lookup (SHA-256 of query, 2-hour TTL) → on miss, Celery task dispatched → client polls `/agent/tasks/{id}` → on SUCCESS, result persisted to DB.
+
+---
+
+## Local Development
+
+### Prerequisites
+
+- Python 3.10+
+- Node.js 20+
+- Docker (for Redis)
+- A [Neon](https://neon.tech) PostgreSQL database with the schema applied
+
+### Setup
 
 ```bash
-OPENAI_API_KEY=your_api_key_here
+# Clone and install Python deps
+pip install .
+
+# Copy and fill in environment variables
+cp .env.example .env
+
+# Apply schema to Neon (one-time)
+python scripts/apply_schema.py
+
+# Ingest documents into pgvector (optional — enables RAG)
+python scripts/ingest_documents.py
 ```
----
 
-## Knowledge Base (Optional)
+### Start all services
 
-The agent supports Retrieval-Augmented Generation (RAG).
-
-To enable domain-specific intelligence, you can connect a custom knowledge base by ingesting documents such as:
-
-- Policy papers  
-- Intelligence reports  
-- Financial analyses  
-- Geopolitical research  
-- Internal PDFs  
-
-If no knowledge base is provided, the system falls back to model reasoning + external signals.
-
----
-
-## ✅ Evaluation Framework
-
-This project includes a built-in evaluation layer designed to measure agent reasoning quality — not just fluency.
-
-Rather than relying on subjective inspection, responses are scored automatically against a benchmark suite that includes both standard and adversarial queries.
-
-### What the evaluator measures
-
-Each response is scored on a **0–10 scale** using production-oriented heuristics:
-
-- **Risk analysis depth** — presence of multiple, distinct downside risks  
-- **External signal awareness** — ability to incorporate macro indicators into reasoning  
-- **Market / asset-level impacts** — decision-grade relevance for investors  
-- **Scenario construction** — structured base vs. escalation thinking  
-- **Confidence calibration** — avoids unjustified certainty or default neutrality  
-- **Decision utility** — clear, actionable investor takeaway  
-
-Perfect scores are intentionally rare — the evaluator caps inflated ratings when analytical depth is limited.
-
-### Run evaluation
 ```bash
-python evaluation/run_eval.py
+# Start Redis
+docker run -d --name redis-georisk -p 6379:6379 redis:7-alpine
+
+# API server
+uvicorn api.main:app --reload --port 8000
+
+# Celery worker (separate terminal)
+# Windows: --pool=solo required
+celery -A api.worker.celery_app worker --loglevel=info --pool=solo
+
+# Frontend
+cd frontend && npm install && npm run dev
 ```
----
 
-### Adversarial Benchmarking
+Or start everything with Docker Compose:
 
-The benchmark intentionally includes ambiguity and false-premise queries to stress-test:
-
-- reasoning robustness  
-- hallucination resistance  
-- confidence discipline  
-
-This helps ensure the agent behaves more like an institutional risk analyst than a generic LLM.
-
----
-
-## 🛠 Local Development
-
-### Streamlit UI
-
-Run an interactive end-to-end analysis:
 ```bash
-streamlit run ui/app.py 
+docker-compose up
 ```
-### CLI
+
+### CLI (no server required)
+
 ```bash
 python scripts/run_planner.py
 ```
+
 ---
 
-## 🚀 Deployment
-### 🐳 Docker
+## Deployment
 
-build:
+### Railway (recommended)
+
+The `railway.toml` at the project root configures the API/worker service. Set all env vars from `.env.example` in the Railway dashboard. Use separate Railway services for the API and worker (set `WORKER_MODE=1` on the worker service).
+
+### Render
+
+`render.yaml` defines a full three-service blueprint: `georisk-api` (FastAPI), `georisk-worker` (Celery), `georisk-frontend` (Next.js). Recommended Redis: Upstash free tier.
+
+### Docker
+
 ```bash
-docker build -t geo-risk-agent .
+# Build API image
+docker build -f Dockerfile.api -t georisk-api .
+
+# Run API
+docker run -e OPENAI_API_KEY=sk-... -e DATABASE_URL=... -p 8000:8000 georisk-api
+
+# Run worker (same image, different mode)
+docker run -e WORKER_MODE=1 -e OPENAI_API_KEY=sk-... georisk-api
 ```
 
-Run:
+---
+
+## Environment Variables
+
+See `.env.example` for the full list. Key variables:
+
+| Variable | Required | Notes |
+|---|---|---|
+| `OPENAI_API_KEY` | Yes | LLM + embeddings |
+| `DATABASE_URL` | Yes | `postgresql+asyncpg://...` on Neon |
+| `JWT_SECRET_KEY` | Yes | Min 32 random bytes in production |
+| `REDIS_URL` | No | Defaults to `redis://localhost:6379/0` |
+| `RESEND_API_KEY` | No | Leave empty to log reset links instead of sending email |
+| `CORS_ORIGINS` | No | Comma-separated allowed origins |
+
+---
+
+## Evaluation Framework
+
+The project includes a rubric-based evaluation layer that scores agent responses 0–10 across six dimensions:
+
+| Dimension | Points |
+|---|---|
+| Market / asset-level impacts | 2–3 |
+| Risk identification depth | 1–2 |
+| External signal awareness | 1 |
+| Scenario construction (base + escalation) | 2 |
+| Investor takeaway utility | 1 |
+| Confidence calibration | 1 |
+
+Scores are capped at 9 if analytical depth is insufficient. `HIGH` confidence is penalized when the score is below 7. The benchmark includes 5 core queries plus 3 adversarial queries (ambiguity, thin evidence, false premise) to stress-test hallucination resistance.
+
 ```bash
-docker run -p 8501:8501 geo-risk-agent
+python evaluation/run_eval.py
 ```
 
-The app runs via a lightweight Python 3.11 container and exposes the Streamlit interface.
-
-
-### 🌍 Cloud Deployment (Render)
-
-The Docker image was pushed to DockerHub and deployed publicly using Render.
-
-Deployment flow:
-
-Build Docker image
-
-Push to DockerHub
-
-Render pulls the image
-
-Environment variables configured securely (e.g., OPENAI_API_KEY)
-
-Public URL generated
-
 ---
-## 📊 Example Analyses
 
-Below are selected example outputs demonstrating the agent’s ability to
-identify first-mover assets, transmission channels, and market mispricing
-across different geopolitical scenarios.
+## Tech Stack
+
+| Layer | Technology |
+|---|---|
+| Agent orchestration | LangGraph |
+| LLM integration | LangChain + OpenAI |
+| Vector search | pgvector on Neon (PostgreSQL) |
+| API | FastAPI + Uvicorn |
+| Task queue | Celery + Redis |
+| Auth | JWT (HS256) + bcrypt + refresh tokens |
+| Database ORM | SQLAlchemy 2.0 (async) + asyncpg |
+| DB migrations | Alembic |
+| Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS v4 |
+| External data | World Bank API + Yahoo Finance (yfinance) |
+| CI/CD | GitHub Actions |
 
 ---
 
-### 1️⃣ Strait of Hormuz – Oil Shock & Inflation Spillover
+## Disclaimer
 
-**Prompt focus**
-- Brent crude & global inflation expectations  
-- US, EU, and Asian equities  
-- Base vs escalation scenario
-
-[📸 View full analysis screenshot](assets/hormuz.png)
-
-**Why this example matters**
-- Clear identification of **first-repricing assets** (oil, energy equities)
-- Explicit inflation transmission into equities
-- Distinction between short disruption vs escalation risk
-
----
-
-### 2️⃣ Emerging Market Political Shock – Credit Contagion
-
-**Prompt focus**
-- Sovereign CDS, HY spreads, EM FX  
-- Spillover into US & EU equities  
-- Base vs escalation scenario
-
-[📸 View full analysis screenshot](assets/em-credit-contagion.png)
-
-**Why this example matters**
-- Demonstrates **credit-first repricing logic**
-- Highlights underpriced contagion risk
-- Connects EM stress to developed market equities via liquidity channels
-
----
-
-### 3️⃣ Global Risk-Off Scenario – Cross-Asset Repricing
-
-**Prompt focus**
-- First-mover asset classes  
-- Transmission channels  
-- Global base vs escalation dynamics
-
-[📸 View full analysis screenshot](assets/global-risk-off.png)
-
-**Why this example matters**
-- Shows cross-asset sequencing (equities → commodities → safe havens)
-- Avoids vague language, focuses on mechanisms
-- Conservative confidence assignment under uncertainty
-
----
-
-## ⚙️ Tech Stack
-
-- Python
-- LangGraph (agent orchestration)
-- LangChain (structured output via Pydantic)
-- Vector Database (Chroma)
-- OpenAI-compatible LLMs
-- World Bank Public API
-- Yahoo Finance API (`yfinance`)
-- Streamlit
-
----
-
-## 🔒 Data & Ethics
-
-- Public data sources only
-- No proprietary or sensitive data
-- Analysis is **non-prescriptive** and **not investment advice**
-
----
-
-## ⚠️ Disclaimer
-
-This project is for educational and research purposes only  
-and does not constitute financial or investment advice.
-
-
-
+This project is for educational and research purposes only and does not constitute financial or investment advice.
