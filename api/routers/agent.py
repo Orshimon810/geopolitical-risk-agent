@@ -16,8 +16,11 @@ GET /agent/tasks/{task_id}
 """
 
 import json
+import logging
 import uuid
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -60,6 +63,7 @@ async def analyze(
 
     cached = await get_cached_result(redis_client, body.query)
     if cached is not None:
+        logger.info("CACHE HIT | user=%s | query=%r", current_user.id, body.query[:120])
         hit_state = {
             "status": "SUCCESS",
             "result": cached,
