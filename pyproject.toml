@@ -25,7 +25,8 @@ dependencies = [
   "asyncpg>=0.29.0",             # fastest async PostgreSQL driver (used by SQLAlchemy)
   "pgvector>=0.3.0",             # Vector column type + SQLAlchemy / asyncpg integration
   "passlib[bcrypt]>=1.7.4",      # bcrypt password hashing for user auth
-  "openai>=1.0.0"                # direct SDK for fallback re-embedding in migration script
+  "openai>=1.0.0",               # direct SDK for fallback re-embedding in migration script
+  "alembic>=1.13.0",            # database migration tooling
 ]
 
 [tool.pytest.ini_options]
