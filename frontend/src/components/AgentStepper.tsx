@@ -46,10 +46,12 @@ export function AgentStepper({ status, error }: AgentStepperProps) {
       return () => timers.forEach(clearTimeout);
     }
     if (status === "SUCCESS" || status === "FAILED") {
-      setVisibleCount(STEPS.length);
+      const t = setTimeout(() => setVisibleCount(STEPS.length), 0);
+      return () => clearTimeout(t);
     }
     if (status === "PENDING") {
-      setVisibleCount(0);
+      const t = setTimeout(() => setVisibleCount(0), 0);
+      return () => clearTimeout(t);
     }
   }, [status]);
 
