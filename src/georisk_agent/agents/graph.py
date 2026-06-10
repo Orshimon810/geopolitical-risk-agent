@@ -22,8 +22,8 @@ def build_graph():
 
     graph.set_entry_point("planner")
     graph.add_edge("planner", "rag_research")
-    graph.add_edge("rag_research", "signals")   
-    graph.add_edge("signals", "analysis")       
+    graph.add_edge("rag_research", "signals")
+    graph.add_edge("signals", "analysis")
     graph.add_edge("analysis", END)
 
     return graph.compile()
