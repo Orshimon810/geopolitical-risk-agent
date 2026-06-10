@@ -9,8 +9,9 @@ export function ThemeToggle() {
   useEffect(() => {
     const stored = localStorage.getItem("georisk-theme");
     const dark = stored !== "light";
-    setIsDark(dark);
     document.documentElement.classList.toggle("light", !dark);
+    const t = setTimeout(() => setIsDark(dark), 0);
+    return () => clearTimeout(t);
   }, []);
 
   const toggle = () => {
