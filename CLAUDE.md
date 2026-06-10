@@ -44,11 +44,15 @@ python scripts/run_planner.py
 # Run evaluation suite (8 benchmark queries scored 0-10)
 python evaluation/run_eval.py
 
-# Run tests
+# Run tests (pure unit tests — no external services required)
 pytest tests/ -v
 
 # Run a single test file
-pytest tests/test_retriever.py -v
+pytest tests/test_signals.py -v
+
+# Frontend lint and build check
+cd frontend && npm run lint
+cd frontend && npm run build
 
 # Docker
 docker build -t georisk-agent .
@@ -64,7 +68,7 @@ A **linear LangGraph state machine** (`agents/graph.py`) with four nodes execute
 1. **Planner** (`nodes_planner.py`) — LLM decomposes query into 4-6 sub-questions (temperature=0.2)
 2. **RAG Research** (`nodes_rag_research.py`) — Retrieves k=3 chunks per sub-question from Neon (pgvector) via `semantic_search()`, deduplicates across the full run by `(source, text)` tuple
 3. **External Signals** (`nodes_signals.py`) — Extracts countries via keyword matching against a 43-country dict plus region aliases (Middle East, Gulf, OPEC, Eastern Europe, etc.), then fetches: (a) World Bank indicators — Trade % of GDP (all detected countries) and Oil Rents % of GDP (oil-producing countries only); (b) live Yahoo Finance market prices — always VIX, Brent crude, Gold, DXY, plus query-specific tickers (e.g. FXI/TSM for China-Taiwan, NG=F for oil/Russia/Ukraine, EEM for EM, FEZ for Europe)
-4. **Analysis** (`nodes_analysis.py`) — LLM synthesizes plan + evidence + signals into an `AnalysisOutput` Pydantic model via LangChain `.with_structured_output()`, guaranteeing six typed fields: `market_impacts`, `risks`, `scenarios`, `investor_takeaway`, `confidence` (Literal["Low","Medium","High"]), `sources`
+4. **Analysis** (`nodes_analysis.py`) — LLM synthesizes plan + evidence + signals into an `AnalysisOutput` Pydantic model via LangChain `.with_structured_output()`, guaranteeing seven typed fields: `reasoning` (chain-of-thought scratchpad, not shown to users — stored in `debug.analysis_reasoning`), `market_impacts`, `risks`, `scenarios`, `investor_takeaway`, `confidence` (Literal["Low","Medium","High"]), `sources`
 
 All nodes share an `AgentState` TypedDict (`app/types.py`) that flows through the graph. Each node is a pure function mapping `AgentState → AgentState`.
 
@@ -117,7 +121,8 @@ GET  /health          → liveness probe
 - `api/schemas/` — Pydantic v2 request/response models for auth and agent endpoints
 
 ### Frontend (`frontend/`)
-- Next.js 16 App Router, TypeScript, Tailwind CSS v4, shadcn-style components
+- **Next.js 16** — this version has breaking changes vs. earlier releases. Before writing any Next.js code, read the relevant guide in `frontend/node_modules/next/dist/docs/` rather than relying on prior knowledge of Next.js conventions.
+- App Router, TypeScript, Tailwind CSS v4, shadcn-style components
 - `src/app/(auth)/` — login and register pages
 - `src/app/(dashboard)/` — authenticated layout with Sidebar + Navbar; analysis and history pages
 - `src/lib/api.ts` — typed API client using `localStorage` JWT; calls all backend endpoints
@@ -128,6 +133,7 @@ GET  /health          → liveness probe
 ### Evaluation & Scripts
 - `evaluation/evaluator.py` — 0-10 rubric: market impacts (2-3 pts), risks (1-2 pts), signals (1 pt), scenarios (2 pts), takeaway (1 pt), confidence calibration (1 pt); caps at 9 if depth insufficient; penalizes HIGH confidence when score < 7
 - `evaluation/benchmark_queries.py` — 5 core queries + 3 adversarial (ambiguity, thin evidence, false premise)
+- `scripts/migrate_chroma_to_pg.py` — one-time migration from legacy ChromaDB to Neon pgvector (already run; kept for reference)
 
 ## Environment Variables
 

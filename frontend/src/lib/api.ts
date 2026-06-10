@@ -17,8 +17,8 @@ async function apiFetch<T>(path: string, options: RequestInit = {}): Promise<T> 
 
   const res = await fetch(`${API_BASE}${path}`, { ...options, headers });
 
-  if (res.status === 401) {
-    // Token expired or invalid — clear it and redirect to login
+  if (res.status === 401 && !path.startsWith("/auth/")) {
+    // Token expired on an authenticated route — clear it and redirect to login
     if (typeof window !== "undefined") {
       localStorage.removeItem("georisk_token");
       window.location.href = "/login";
