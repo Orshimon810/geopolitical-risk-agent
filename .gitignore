@@ -202,6 +202,7 @@ cython_debug/
 # Local notes (not for version control)
 MISSING_FEATURES.txt
 FEATURE_*.txt
+SESSION_*.txt
 
 # MCP config (contains API keys)
 .mcp.json
