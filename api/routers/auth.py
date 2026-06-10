@@ -20,8 +20,10 @@ from georisk_agent.db.dal import authenticate_user, create_user, get_user_by_ema
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
-_REGISTER_LIMIT = 5   # max registrations per IP per hour
-_REGISTER_TTL  = 3600
+_REGISTER_LIMIT = 5    # max registrations per IP per hour
+_REGISTER_TTL   = 3600
+_LOGIN_LIMIT    = 10   # max login attempts per IP per 15 minutes
+_LOGIN_TTL      = 900
 
 
 async def _check_register_rate(request: Request, redis_client: aioredis.Redis) -> None:
@@ -37,6 +39,22 @@ async def _check_register_rate(request: Request, redis_client: aioredis.Redis) -
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="Too many registration attempts. Please try again later.",
             headers={"Retry-After": "3600"},
+        )
+
+
+async def _check_login_rate(request: Request, redis_client: aioredis.Redis) -> None:
+    """Block more than 10 login attempts per IP per 15 minutes."""
+    client_ip = request.client.host if request.client else "unknown"
+    window = datetime.now(timezone.utc).strftime("%Y%m%d%H") + str(datetime.now(timezone.utc).minute // 15)
+    key = f"login:{client_ip}:{window}"
+    count = await redis_client.incr(key)
+    if count == 1:
+        await redis_client.expire(key, _LOGIN_TTL)
+    if count > _LOGIN_LIMIT:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many login attempts. Please try again later.",
+            headers={"Retry-After": "900"},
         )
 
 
@@ -91,9 +109,12 @@ async def register(
     summary="Exchange credentials for a JWT access token",
 )
 async def login(
+    request: Request,
     body: LoginRequest,
     session: AsyncSession = Depends(db_session),
+    redis_client: aioredis.Redis = Depends(get_redis),
 ) -> TokenResponse:
+    await _check_login_rate(request, redis_client)
     user = await authenticate_user(session, body.email, body.password)
     if user is None:
         # Use the same generic message for missing user and wrong password to
