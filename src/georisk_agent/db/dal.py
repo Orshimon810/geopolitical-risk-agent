@@ -9,41 +9,37 @@ Design principles:
     re-ingestion of the same document corpus is always idempotent.
   - Semantic search uses raw SQL text() for the pgvector <=> operator; SQLAlchemy's
     ORM query builder doesn't natively know this operator, and raw SQL is clearer here.
-  - Password hashing uses passlib/bcrypt — never store or compare plaintext passwords.
+  - Password hashing uses bcrypt directly — never store or compare plaintext passwords.
   - All public functions are async; none block the event loop.
 """
 
 import logging
+import secrets
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from passlib.context import CryptContext
-from sqlalchemy import delete, select, text
+import bcrypt as _bcrypt
+from sqlalchemy import delete, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from georisk_agent.db.models import AnalysisHistory, GeopoliticalEmbedding, User
+from georisk_agent.db.models import AnalysisHistory, GeopoliticalEmbedding, PasswordResetToken, User
 
 logger = logging.getLogger(__name__)
-
-# bcrypt with 12 rounds is the current industry standard for password hashing.
-# Increase rounds on hardware that can afford the extra latency (each +1 doubles cost).
-_pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=12)
-
 
 # =============================================================================
 # Password utilities (stateless — no session needed)
 # =============================================================================
 
 def hash_password(plaintext: str) -> str:
-    """Return a bcrypt hash of the given password. Never store plaintext."""
-    return _pwd_ctx.hash(plaintext)
+    """Return a bcrypt hash (12 rounds). Never store plaintext."""
+    return _bcrypt.hashpw(plaintext.encode(), _bcrypt.gensalt(rounds=12)).decode()
 
 
 def verify_password(plaintext: str, hashed: str) -> bool:
     """Return True iff plaintext matches the stored bcrypt hash."""
-    return _pwd_ctx.verify(plaintext, hashed)
+    return _bcrypt.checkpw(plaintext.encode(), hashed.encode())
 
 
 # =============================================================================
@@ -96,36 +92,12 @@ async def authenticate_user(
     """
     user = await get_user_by_email(session, email)
     if user is None:
-        # Perform a dummy verify to normalise response time and avoid
-        # user-enumeration via timing side-channel.
-        _pwd_ctx.dummy_verify()
+        # Dummy verify to normalise response time and prevent user-enumeration.
+        _bcrypt.checkpw(b"dummy", _bcrypt.hashpw(b"dummy", _bcrypt.gensalt()))
         return None
     if not verify_password(password_plaintext, user.password_hash):
         return None
     return user
-
-
-async def increment_daily_query_count(
-    session: AsyncSession, user_id: uuid.UUID
-) -> int:
-    """
-    Atomically increment the daily query counter, resetting it if the day has rolled over.
-    Returns the new counter value so the caller can enforce tier limits.
-    Raises ValueError if the user is not found.
-    """
-    user = await get_user_by_id(session, user_id)
-    if user is None:
-        raise ValueError(f"User {user_id} not found")
-
-    now = datetime.now(timezone.utc)
-    if user.daily_reset_at.date() < now.date():
-        user.daily_query_count = 1
-        user.daily_reset_at = now
-    else:
-        user.daily_query_count += 1
-
-    await session.flush()
-    return user.daily_query_count
 
 
 # =============================================================================
@@ -391,6 +363,20 @@ async def get_analysis_by_id(
     return result.scalar_one_or_none()
 
 
+async def delete_analysis_by_id(
+    session: AsyncSession,
+    analysis_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> bool:
+    """Delete a single analysis by ID, enforcing ownership. Returns True if deleted."""
+    result = await session.execute(
+        delete(AnalysisHistory)
+        .where(AnalysisHistory.id == analysis_id)
+        .where(AnalysisHistory.user_id == user_id)
+    )
+    return result.rowcount > 0  # type: ignore[return-value]
+
+
 async def delete_user_history(
     session: AsyncSession, user_id: uuid.UUID
 ) -> int:
@@ -399,3 +385,61 @@ async def delete_user_history(
         delete(AnalysisHistory).where(AnalysisHistory.user_id == user_id)
     )
     return result.rowcount  # type: ignore[return-value]
+
+
+# =============================================================================
+# Password reset tokens
+# =============================================================================
+
+async def create_reset_token(session: AsyncSession, user_id: uuid.UUID) -> str:
+    """
+    Create a one-time password reset token valid for 1 hour.
+    Invalidates any previous unused tokens for the same user first.
+    Returns the raw URL-safe token string (include this in the reset link).
+    """
+    await session.execute(
+        delete(PasswordResetToken).where(
+            PasswordResetToken.user_id == user_id,
+            PasswordResetToken.used_at.is_(None),
+        )
+    )
+    raw_token = secrets.token_urlsafe(32)
+    record = PasswordResetToken(
+        user_id=user_id,
+        token=raw_token,
+        expires_at=datetime.now(timezone.utc) + timedelta(hours=1),
+    )
+    session.add(record)
+    await session.flush()
+    logger.info("Created password reset token for user_id=%s", user_id)
+    return raw_token
+
+
+async def get_valid_reset_token(
+    session: AsyncSession, raw_token: str
+) -> PasswordResetToken | None:
+    """Return the token record only if it exists, is unused, and has not expired."""
+    result = await session.execute(
+        select(PasswordResetToken).where(
+            PasswordResetToken.token == raw_token,
+            PasswordResetToken.used_at.is_(None),
+            PasswordResetToken.expires_at > datetime.now(timezone.utc),
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def consume_reset_token(
+    session: AsyncSession,
+    token_record: PasswordResetToken,
+    new_password: str,
+) -> None:
+    """Mark the token as used and update the user's password in one flush."""
+    token_record.used_at = datetime.now(timezone.utc)
+    await session.execute(
+        update(User)
+        .where(User.id == token_record.user_id)
+        .values(password_hash=hash_password(new_password))
+    )
+    await session.flush()
+    logger.info("Password reset consumed for user_id=%s", token_record.user_id)

@@ -1,0 +1,104 @@
+# Render Blueprint — declarative deployment for the Geopolitical Risk Agent.
+# Docs: https://render.com/docs/blueprint-spec
+#
+# Services declared here:
+#   georisk-api      — FastAPI backend (Web Service)
+#   georisk-worker   — Celery background worker (Worker Service)
+#   georisk-frontend — Next.js frontend (Web Service)
+#
+# Redis is NOT declared here because Render's managed Redis starts at $10/month.
+# We recommend Upstash Redis (free tier, 10k cmd/day):
+#   1. Sign up at https://upstash.com and create ONE Redis database.
+#   2. Copy the "Redis URL" (starts with rediss://) from the Upstash console.
+#   3. Set these three env vars in the Render dashboard to that URL with different DB numbers:
+#        REDIS_URL      → rediss://:password@host:port/0
+#        BROKER_URL     → rediss://:password@host:port/1
+#        RESULT_BACKEND → rediss://:password@host:port/2
+#   (Upstash supports Redis DB numbers 0-15 on all plans.)
+#
+# CORS_ORIGINS must be the exact URL Render assigns to georisk-frontend.
+# After first deploy, copy the frontend URL from the Render dashboard and set
+# CORS_ORIGINS on georisk-api to match (e.g. https://georisk-frontend.onrender.com).
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # API — FastAPI web server
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: georisk-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile.api
+    dockerContext: .
+    plan: starter          # $7/month — always-on, no cold starts
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: APP_ENV
+        value: prod
+      - key: OPENAI_API_KEY
+        sync: false        # paste from https://platform.openai.com/api-keys
+      - key: DATABASE_URL
+        sync: false        # postgresql+asyncpg://user:pass@ep-xxx.neon.tech/dbname?sslmode=require
+      - key: JWT_SECRET_KEY
+        generateValue: true   # Render generates a strong random secret automatically
+      - key: JWT_ALGORITHM
+        value: HS256
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "60"
+      - key: REDIS_URL
+        sync: false        # rediss://:pass@host:port/0  (Upstash DB 0)
+      - key: BROKER_URL
+        sync: false        # rediss://:pass@host:port/1  (Upstash DB 1)
+      - key: RESULT_BACKEND
+        sync: false        # rediss://:pass@host:port/2  (Upstash DB 2)
+      - key: RATE_LIMIT_PER_HOUR
+        value: "5"
+      - key: CORS_ORIGINS
+        sync: false        # https://georisk-frontend.onrender.com (set after first deploy)
+      - key: MODEL_NAME
+        value: gpt-4o-mini
+
+  # ---------------------------------------------------------------------------
+  # Worker — Celery background task processor
+  # Same Docker image as the API; CMD is overridden here.
+  # ---------------------------------------------------------------------------
+  - type: worker
+    name: georisk-worker
+    runtime: docker
+    dockerfilePath: ./Dockerfile.worker
+    dockerContext: .
+    plan: starter          # $7/month
+    autoDeploy: true
+    envVars:
+      - key: APP_ENV
+        value: prod
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: REDIS_URL
+        sync: false
+      - key: BROKER_URL
+        sync: false
+      - key: RESULT_BACKEND
+        sync: false
+      - key: MODEL_NAME
+        value: gpt-4o-mini
+
+  # ---------------------------------------------------------------------------
+  # Frontend — Next.js (standalone build)
+  # NEXT_PUBLIC_API_URL is baked in at build time by the Dockerfile ARG.
+  # Set it to the API service URL before deploying.
+  # ---------------------------------------------------------------------------
+  - type: web
+    name: georisk-frontend
+    runtime: docker
+    dockerfilePath: ./frontend/Dockerfile
+    dockerContext: ./frontend
+    plan: starter          # $7/month
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: NEXT_PUBLIC_API_URL
+        sync: false        # https://georisk-api.onrender.com  (no trailing slash)

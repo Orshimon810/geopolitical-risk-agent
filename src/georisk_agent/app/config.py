@@ -1,28 +1,77 @@
-from pydantic import BaseModel
 from dotenv import load_dotenv
+from pydantic import BaseModel
 import os
 
-# Load environment variables from .env if present
 load_dotenv()
 
-class Settings(BaseModel):
-    """
-    Centralized application configuration.
-    All environment-dependent values live here.
-    """
+_WEAK_JWT_DEFAULT = "change-me-in-production"
 
+
+class Settings(BaseModel):
+    """Centralised application configuration. All values sourced from environment variables."""
+
+    # --- Core ---
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
     model_name: str = os.getenv("MODEL_NAME", "gpt-4o-mini")
-    chroma_dir: str = os.getenv("CHROMA_DIR", ".chroma")
     app_env: str = os.getenv("APP_ENV", "dev")
-    session_query_limit: int = int(os.getenv("SESSION_QUERY_LIMIT", "5"))
-    daily_query_limit: int = int(os.getenv("DAILY_QUERY_LIMIT", "30"))
 
-    # PostgreSQL connection string (Step 1: pgvector migration).
-    # Format: postgresql+asyncpg://user:pass@host:5432/dbname
-    # Managed services (Neon/Supabase): append ?sslmode=require
+    # --- PostgreSQL / pgvector ---
     database_url: str = os.getenv("DATABASE_URL", "")
 
+    # --- JWT ---
+    jwt_secret_key: str = os.getenv("JWT_SECRET_KEY", _WEAK_JWT_DEFAULT)
+    jwt_algorithm: str = os.getenv("JWT_ALGORITHM", "HS256")
+    access_token_expire_minutes: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "60"))
 
-# Singleton-like settings object
+    # --- Redis ---
+    redis_url: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+    rate_limit_per_hour: int = int(os.getenv("RATE_LIMIT_PER_HOUR", "5"))
+
+    # --- Celery ---
+    broker_url: str = os.getenv("BROKER_URL", "redis://localhost:6379/1")
+    result_backend: str = os.getenv("RESULT_BACKEND", "redis://localhost:6379/2")
+
+    # --- Query result cache ---
+    query_cache_ttl_seconds: int = int(os.getenv("QUERY_CACHE_TTL", "7200"))
+
+    # --- Email (password reset via Resend API — https://resend.com) ---
+    # Leave RESEND_API_KEY empty to use dev mode: reset links are logged instead of sent.
+    resend_api_key: str = os.getenv("RESEND_API_KEY", "")
+    smtp_from: str = os.getenv("SMTP_FROM", "onboarding@resend.dev")
+    frontend_url: str = os.getenv("FRONTEND_URL", "http://localhost:3000")
+
+    @property
+    def is_prod(self) -> bool:
+        return self.app_env == "prod"
+
+    def validate_for_production(self) -> None:
+        """
+        Fail fast if required env vars are missing or left at insecure defaults.
+        Call this once at application startup (lifespan hook in api/main.py).
+        In non-prod environments this is a no-op so local dev stays frictionless.
+        """
+        if not self.is_prod:
+            return
+
+        errors: list[str] = []
+
+        if not self.openai_api_key:
+            errors.append("OPENAI_API_KEY is not set")
+
+        if not self.database_url:
+            errors.append("DATABASE_URL is not set")
+
+        if not self.jwt_secret_key or self.jwt_secret_key == _WEAK_JWT_DEFAULT:
+            errors.append(
+                "JWT_SECRET_KEY is missing or still set to the insecure default. "
+                "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+            )
+
+        if errors:
+            raise RuntimeError(
+                "Production startup validation failed — fix these before deploying:\n"
+                + "\n".join(f"  • {e}" for e in errors)
+            )
+
+
 settings = Settings()
