@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { TrendingUp, Loader2 } from "lucide-react";
@@ -16,14 +16,11 @@ export default function LoginPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
-  const [sessionMessage, setSessionMessage] = useState("");
+  const sessionMessage =
+    searchParams.get("reason") === "session_expired"
+      ? "Your session expired. Please log in again."
+      : null;
   const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    if (searchParams.get("reason") === "session_expired") {
-      setSessionMessage("Your session expired. Please log in again.");
-    }
-  }, [searchParams]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
