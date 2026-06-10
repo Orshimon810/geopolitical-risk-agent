@@ -31,13 +31,10 @@ class Settings(BaseModel):
     broker_url: str = os.getenv("BROKER_URL", "redis://localhost:6379/1")
     result_backend: str = os.getenv("RESULT_BACKEND", "redis://localhost:6379/2")
 
-    # --- Email (password reset) ---
-    # Leave SMTP_HOST empty to use dev mode: reset links are logged instead of sent.
-    smtp_host: str = os.getenv("SMTP_HOST", "")
-    smtp_port: int = int(os.getenv("SMTP_PORT", "587"))
-    smtp_user: str = os.getenv("SMTP_USER", "")
-    smtp_password: str = os.getenv("SMTP_PASSWORD", "")
-    smtp_from: str = os.getenv("SMTP_FROM", "noreply@georisk.ai")
+    # --- Email (password reset via Resend API — https://resend.com) ---
+    # Leave RESEND_API_KEY empty to use dev mode: reset links are logged instead of sent.
+    resend_api_key: str = os.getenv("RESEND_API_KEY", "")
+    smtp_from: str = os.getenv("SMTP_FROM", "onboarding@resend.dev")
     frontend_url: str = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
     @property
