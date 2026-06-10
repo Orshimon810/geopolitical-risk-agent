@@ -147,7 +147,7 @@ async def login(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    access_token = create_access_token({"sub": str(user.id)})
+    access_token = create_access_token({"sub": str(user.id), "email": user.email})
     await _set_refresh_cookie(response, redis_client, str(user.id))
     return TokenResponse(access_token=access_token)
 
@@ -187,7 +187,7 @@ async def refresh_token(
             detail="User not found or account inactive.",
         )
 
-    new_access_token = create_access_token({"sub": str(user.id)})
+    new_access_token = create_access_token({"sub": str(user.id), "email": user.email})
     await _set_refresh_cookie(response, redis_client, str(user.id))
     return TokenResponse(access_token=new_access_token)
 

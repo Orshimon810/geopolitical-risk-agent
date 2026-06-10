@@ -40,17 +40,18 @@ export function AgentStepper({ status, error }: AgentStepperProps) {
 
   useEffect(() => {
     if (status === "PROCESSING") {
-      setVisibleCount(1);
-      const timers = STEPS.slice(1).map((_, i) =>
-        setTimeout(() => setVisibleCount(i + 2), (i + 1) * STEP_DELAY_MS)
+      const timers = STEPS.map((_, i) =>
+        setTimeout(() => setVisibleCount(i + 1), i * STEP_DELAY_MS)
       );
       return () => timers.forEach(clearTimeout);
     }
     if (status === "SUCCESS" || status === "FAILED") {
-      setVisibleCount(STEPS.length);
+      const t = setTimeout(() => setVisibleCount(STEPS.length), 0);
+      return () => clearTimeout(t);
     }
     if (status === "PENDING") {
-      setVisibleCount(0);
+      const t = setTimeout(() => setVisibleCount(0), 0);
+      return () => clearTimeout(t);
     }
   }, [status]);
 
