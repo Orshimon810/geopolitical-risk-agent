@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { TrendingUp, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -11,10 +12,18 @@ import { useAuth } from "@/context/AuthContext";
 
 export default function LoginPage() {
   const { login } = useAuth();
+  const searchParams = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [sessionMessage, setSessionMessage] = useState("");
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (searchParams.get("reason") === "session_expired") {
+      setSessionMessage("Your session expired. Please log in again.");
+    }
+  }, [searchParams]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -42,6 +51,11 @@ export default function LoginPage() {
       </CardHeader>
 
       <CardContent className="space-y-4 pt-4">
+        {sessionMessage && (
+          <div className="rounded-md border border-amber-700 bg-amber-950/40 px-3 py-2 text-xs text-amber-400">
+            {sessionMessage}
+          </div>
+        )}
         <form onSubmit={handleSubmit} className="space-y-3">
           <div className="space-y-1.5">
             <Label htmlFor="email">Email</Label>
