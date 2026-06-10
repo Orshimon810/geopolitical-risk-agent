@@ -1,37 +1,192 @@
 @import "tailwindcss";
 
+@theme {
+  /* ── Slate → pure neutral/black (removes blue tint) ── */
+  --color-slate-950: #080808;
+  --color-slate-900: #0f0f0f;
+  --color-slate-800: #1a1a1a;
+  --color-slate-700: #262626;
+  --color-slate-600: #525252;
+  --color-slate-500: #737373;
+  --color-slate-400: #a3a3a3;
+  --color-slate-300: #d4d4d4;
+  --color-slate-200: #e5e5e5;
+  --color-slate-100: #f5f5f5;
+  --color-slate-50:  #fafafa;
+
+  /* ── Blue → Amber (Bloomberg terminal accent) ── */
+  --color-blue-950: #1a0e00;
+  --color-blue-900: #2d1c00;
+  --color-blue-800: #4d3000;
+  --color-blue-700: #7c4a00;
+  --color-blue-600: #b45309;
+  --color-blue-500: #d97706;
+  --color-blue-400: #f59e0b;
+  --color-blue-300: #fbbf24;
+  --color-blue-200: #fde68a;
+  --color-blue-100: #fef3c7;
+  --color-blue-50:  #fffbeb;
+}
+
 :root {
   color-scheme: dark;
 }
 
 body {
-  background-color: #020617;
-  color: #f8fafc;
-  font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+  background-color: #080808;
+  color: #e5e5e5;
+  font-family: var(--font-inter, ui-sans-serif, system-ui, -apple-system, sans-serif);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* Scrollbar */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: #0f172a; }
-::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #475569; }
+/* ── Monospace class for all financial data ── */
+.data-mono {
+  font-family: var(--font-mono, ui-monospace, "IBM Plex Mono", SFMono-Regular, Menlo, monospace);
+  font-variant-numeric: tabular-nums;
+}
 
-/* Markdown prose */
-.prose { color: #cbd5e1; line-height: 1.7; }
-.prose h1, .prose h2, .prose h3 { color: #f8fafc; font-weight: 600; margin-top: 1.5em; margin-bottom: 0.5em; }
-.prose h2 { font-size: 1.1rem; border-bottom: 1px solid #1e293b; padding-bottom: 0.4em; }
-.prose h3 { font-size: 0.95rem; color: #94a3b8; }
+/* ── Scrollbar ── */
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track { background: #0a0a0a; }
+::-webkit-scrollbar-thumb { background: #2a2a2a; border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover { background: #404040; }
+
+/* ── Bloomberg section header with trailing rule ── */
+.section-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.625rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #525252;
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.section-header::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: linear-gradient(to right, #1f1f1f, transparent);
+}
+
+/* ── Terminal window chrome ── */
+.terminal-window {
+  border: 1px solid #1f1f1f;
+  border-radius: 10px;
+  overflow: hidden;
+  background: #0a0a0a;
+  box-shadow: 0 0 0 1px #141414, 0 25px 50px -12px rgba(0,0,0,0.8);
+}
+.terminal-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 14px;
+  background: #111111;
+  border-bottom: 1px solid #1a1a1a;
+}
+.terminal-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+}
+
+/* ── CRT scanline overlay ── */
+.scanline-overlay {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 2px,
+    rgba(0, 0, 0, 0.025) 2px,
+    rgba(0, 0, 0, 0.025) 4px
+  );
+  z-index: 1;
+}
+
+/* ── Amber glow for focused/active elements ── */
+.amber-glow {
+  box-shadow: 0 0 0 1px rgba(245, 158, 11, 0.25), 0 0 16px rgba(245, 158, 11, 0.08);
+}
+
+/* ── Markdown prose — Bloomberg style ── */
+.prose {
+  color: #a3a3a3;
+  line-height: 1.75;
+}
+.prose h1,
+.prose h2,
+.prose h3 {
+  color: #f5f5f5;
+  font-weight: 600;
+  margin-top: 1.5em;
+  margin-bottom: 0.5em;
+}
+.prose h2 {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: #d97706;
+  border-bottom: 1px solid #1a1a1a;
+  padding-bottom: 0.5em;
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
+.prose h3 {
+  font-size: 0.875rem;
+  color: #737373;
+}
 .prose p { margin-bottom: 0.75em; }
-.prose ul { list-style: disc; padding-left: 1.25em; margin-bottom: 0.75em; }
-.prose li { margin-bottom: 0.25em; }
-.prose strong { color: #f8fafc; font-weight: 600; }
-.prose code { background: #1e293b; padding: 0.15em 0.4em; border-radius: 4px; font-size: 0.85em; color: #7dd3fc; }
+.prose ul {
+  list-style: none;
+  padding-left: 0;
+  margin-bottom: 0.75em;
+}
+.prose li {
+  margin-bottom: 0.4em;
+  padding-left: 1.25em;
+  position: relative;
+}
+.prose li::before {
+  content: '▸';
+  position: absolute;
+  left: 0;
+  color: #d97706;
+  font-size: 0.65em;
+  top: 0.35em;
+  font-family: var(--font-mono, monospace);
+}
+.prose strong { color: #f5f5f5; font-weight: 600; }
+.prose code {
+  background: #1a1a1a;
+  padding: 0.15em 0.4em;
+  border-radius: 3px;
+  font-size: 0.85em;
+  color: #fbbf24;
+  font-family: var(--font-mono, ui-monospace, monospace);
+}
 
-/* Pulse animation for active step */
+/* ── Pulse animation — amber for active agent step ── */
 @keyframes pulse-ring {
-  0% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4); }
-  70% { box-shadow: 0 0 0 8px rgba(59, 130, 246, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0); }
+  0%   { box-shadow: 0 0 0 0   rgba(217, 119,  6, 0.6); }
+  70%  { box-shadow: 0 0 0 8px rgba(217, 119,  6, 0);   }
+  100% { box-shadow: 0 0 0 0   rgba(217, 119,  6, 0);   }
 }
 .pulse-active { animation: pulse-ring 1.5s ease-out infinite; }
+
+/* ── Terminal cursor blink ── */
+@keyframes cursor-blink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+.cursor-blink { animation: cursor-blink 1s step-end infinite; }
+
+/* ── Subtle entrance animation ── */
+@keyframes fade-up {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.fade-up { animation: fade-up 0.35s ease forwards; }

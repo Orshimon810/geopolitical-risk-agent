@@ -1,152 +1,210 @@
 "use client";
 
-import ReactMarkdown from "react-markdown";
-import { AlertTriangle, BarChart2, Lightbulb, Map, BookOpen } from "lucide-react";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { motion } from "framer-motion";
+import { AlertTriangle, BarChart2, Lightbulb, GitBranch, BookOpen, Map } from "lucide-react";
 import { MarketSignals } from "@/components/MarketSignals";
 import type { AnalysisResult, Confidence } from "@/lib/types";
-
-function confidenceVariant(c: Confidence) {
-  return c === "High" ? "high" : c === "Medium" ? "medium" : "low";
-}
 
 interface ResultsDisplayProps {
   result: AnalysisResult;
   query: string;
 }
 
-export function ResultsDisplay({ result, query }: ResultsDisplayProps) {
-  const synthesized = [
-    result.market_impacts?.length ? `## Market Impacts\n${result.market_impacts.map((i) => `- ${i}`).join("\n")}` : "",
-    result.risks?.length ? `## Key Risks\n${result.risks.map((r) => `- ${r}`).join("\n")}` : "",
-    result.scenarios?.length ? `## Scenarios\n${result.scenarios.map((s) => `- ${s}`).join("\n")}` : "",
-    result.investor_takeaway?.length
-      ? `## Investor Takeaway\n${result.investor_takeaway.map((t) => `- ${t}`).join("\n")}`
-      : "",
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+/* ── Confidence meter — three ascending bars like signal strength ── */
+function ConfidenceMeter({ level }: { level: Confidence }) {
+  const rank: Record<Confidence, number> = { Low: 1, Medium: 2, High: 3 };
+  const colorClass: Record<Confidence, string> = {
+    Low:    "bg-rose-500",
+    Medium: "bg-amber-500",
+    High:   "bg-emerald-500",
+  };
+  const labelClass: Record<Confidence, string> = {
+    Low:    "text-rose-400",
+    Medium: "text-amber-400",
+    High:   "text-emerald-400",
+  };
 
   return (
-    <div className="space-y-4">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-600 mb-1">
-            Analysis Complete
-          </p>
-          <p className="text-sm text-slate-400 line-clamp-2">{query}</p>
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <span className="text-xs text-slate-500">Confidence</span>
-          <Badge variant={confidenceVariant(result.confidence)} className="text-xs">
-            {result.confidence}
-          </Badge>
-        </div>
+    <div className="text-right shrink-0">
+      <p className="text-[9px] text-slate-600 uppercase tracking-[0.18em] data-mono mb-2">
+        CONFIDENCE
+      </p>
+      <div className="flex items-end justify-end gap-1 mb-1">
+        {(["Low", "Medium", "High"] as Confidence[]).map((l) => {
+          const filled = rank[level] >= rank[l];
+          const heights = { Low: "h-2", Medium: "h-3.5", High: "h-5" };
+          return (
+            <div
+              key={l}
+              className={`w-4 rounded-sm transition-all duration-500 ${heights[l]} ${
+                filled ? colorClass[level] : "bg-slate-800"
+              }`}
+            />
+          );
+        })}
       </div>
-
-      {/* Main report */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <BookOpen className="h-3.5 w-3.5 text-blue-400" />
-            Synthesized Report
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="prose max-w-none">
-            <ReactMarkdown>{synthesized}</ReactMarkdown>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Metrics grid */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <MetricCard
-          icon={<BarChart2 className="h-4 w-4 text-blue-400" />}
-          label="Market Impacts"
-          items={result.market_impacts}
-          color="blue"
-        />
-        <MetricCard
-          icon={<AlertTriangle className="h-4 w-4 text-amber-400" />}
-          label="Key Risks"
-          items={result.risks}
-          color="amber"
-        />
-        <MetricCard
-          icon={<Lightbulb className="h-4 w-4 text-emerald-400" />}
-          label="Investor Takeaway"
-          items={result.investor_takeaway}
-          color="emerald"
-        />
-      </div>
-
-      {/* Market signals */}
-      {result.signals && (result.signals.market_data || result.signals.countries) && (
-        <MarketSignals signals={result.signals} />
-      )}
-
-      {/* Sources */}
-      {result.sources?.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Map className="h-3.5 w-3.5 text-slate-400" />
-              Sources
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ul className="space-y-1">
-              {result.sources.map((src, i) => (
-                <li key={i} className="text-xs text-slate-400 flex gap-2">
-                  <span className="text-slate-600">{i + 1}.</span>
-                  {src}
-                </li>
-              ))}
-            </ul>
-          </CardContent>
-        </Card>
-      )}
+      <span className={`text-xs font-bold data-mono uppercase ${labelClass[level]}`}>
+        {level}
+      </span>
     </div>
   );
 }
 
-function MetricCard({
-  icon,
+/* ── Bloomberg-style section wrapper ── */
+function Section({
   label,
-  items,
-  color,
+  icon,
+  children,
+  delay = 0,
 }: {
-  icon: React.ReactNode;
   label: string;
-  items: string[];
-  color: "blue" | "amber" | "emerald";
+  icon: React.ReactNode;
+  children: React.ReactNode;
+  delay?: number;
 }) {
-  const borderMap = { blue: "border-blue-800/40", amber: "border-amber-800/40", emerald: "border-emerald-800/40" };
-  const bgMap = { blue: "bg-blue-950/20", amber: "bg-amber-950/20", emerald: "bg-emerald-950/20" };
-
   return (
-    <div className={`rounded-xl border ${borderMap[color]} ${bgMap[color]} p-4`}>
-      <div className="flex items-center gap-2 mb-3">
-        {icon}
-        <span className="text-xs font-semibold text-slate-300">{label}</span>
+    <motion.div
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3, delay }}
+      className="border-t border-slate-800 pt-4 space-y-3"
+    >
+      <div className="section-header">
+        <span className="text-amber-600/70 shrink-0">{icon}</span>
+        {label}
       </div>
-      {items?.length ? (
-        <ul className="space-y-1.5">
-          {items.slice(0, 4).map((item, i) => (
-            <li key={i} className="text-xs text-slate-400 leading-relaxed">
-              • {item}
-            </li>
-          ))}
-          {items.length > 4 && (
-            <li className="text-xs text-slate-600">+{items.length - 4} more</li>
-          )}
-        </ul>
-      ) : (
-        <p className="text-xs text-slate-600">No data</p>
-      )}
-    </div>
+      {children}
+    </motion.div>
+  );
+}
+
+/* ── Bullet list used in most sections ── */
+function BulletList({ items }: { items: string[] }) {
+  return (
+    <ul className="space-y-2">
+      {items.map((item, i) => (
+        <li key={i} className="flex items-start gap-2.5 text-sm text-slate-300 leading-relaxed">
+          <span className="text-amber-500 mt-1 shrink-0 text-[10px] data-mono">▸</span>
+          {item}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+export function ResultsDisplay({ result, query }: ResultsDisplayProps) {
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.4 }}
+      className="rounded-xl border border-slate-800 bg-slate-900 overflow-hidden"
+    >
+      {/* ── Header ── */}
+      <div className="px-6 py-5 border-b border-slate-800 flex items-start justify-between gap-6">
+        <div className="min-w-0">
+          <p className="text-[9px] text-amber-600/70 uppercase tracking-[0.18em] data-mono mb-2">
+            ANALYSIS COMPLETE
+          </p>
+          <p className="text-sm text-slate-300 leading-relaxed line-clamp-3">{query}</p>
+        </div>
+        <ConfidenceMeter level={result.confidence} />
+      </div>
+
+      {/* ── Sections ── */}
+      <div className="px-6 py-5 space-y-4">
+
+        {/* Market Impacts */}
+        {result.market_impacts?.length > 0 && (
+          <Section
+            label="MARKET IMPACTS"
+            icon={<BarChart2 className="h-3 w-3" />}
+            delay={0.05}
+          >
+            <BulletList items={result.market_impacts} />
+          </Section>
+        )}
+
+        {/* Key Risks */}
+        {result.risks?.length > 0 && (
+          <Section
+            label="KEY RISKS"
+            icon={<AlertTriangle className="h-3 w-3" />}
+            delay={0.1}
+          >
+            <BulletList items={result.risks} />
+          </Section>
+        )}
+
+        {/* Scenarios */}
+        {result.scenarios?.length > 0 && (
+          <Section
+            label="SCENARIOS"
+            icon={<GitBranch className="h-3 w-3" />}
+            delay={0.15}
+          >
+            <div className="space-y-2">
+              {result.scenarios.map((scenario, i) => (
+                <div
+                  key={i}
+                  className="flex items-start gap-3 rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2.5"
+                >
+                  <span className="text-[10px] font-bold text-slate-600 data-mono mt-0.5 shrink-0 w-4">
+                    {String.fromCharCode(65 + i)}
+                  </span>
+                  <p className="text-sm text-slate-300 leading-relaxed">{scenario}</p>
+                </div>
+              ))}
+            </div>
+          </Section>
+        )}
+
+        {/* Investor Takeaway — pull-quote style */}
+        {result.investor_takeaway?.length > 0 && (
+          <Section
+            label="INVESTOR TAKEAWAY"
+            icon={<Lightbulb className="h-3 w-3" />}
+            delay={0.2}
+          >
+            <div className="border-l-2 border-amber-500/50 pl-4 space-y-2">
+              {result.investor_takeaway.map((item, i) => (
+                <p key={i} className="text-sm text-slate-200 leading-relaxed font-medium">
+                  {item}
+                </p>
+              ))}
+            </div>
+          </Section>
+        )}
+
+        {/* Market signals */}
+        {result.signals && (result.signals.market_data || result.signals.countries) && (
+          <Section
+            label="MARKET SIGNALS"
+            icon={<BookOpen className="h-3 w-3" />}
+            delay={0.25}
+          >
+            <MarketSignals signals={result.signals} />
+          </Section>
+        )}
+
+        {/* Sources */}
+        {result.sources?.length > 0 && (
+          <Section
+            label="SOURCES"
+            icon={<Map className="h-3 w-3" />}
+            delay={0.3}
+          >
+            <ol className="space-y-1.5">
+              {result.sources.map((src, i) => (
+                <li key={i} className="flex items-start gap-2 text-xs text-slate-500 leading-relaxed">
+                  <span className="text-slate-700 data-mono shrink-0 w-4">{i + 1}.</span>
+                  <span>{src}</span>
+                </li>
+              ))}
+            </ol>
+          </Section>
+        )}
+      </div>
+    </motion.div>
   );
 }
