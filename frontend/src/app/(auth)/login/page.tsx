@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { TrendingUp, Loader2 } from "lucide-react";
@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { useAuth } from "@/context/AuthContext";
 
-export default function LoginPage() {
+function LoginForm() {
   const { login } = useAuth();
   const searchParams = useSearchParams();
   const [email, setEmail] = useState("");
@@ -116,5 +116,13 @@ export default function LoginPage() {
         </p>
       </CardContent>
     </Card>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense>
+      <LoginForm />
+    </Suspense>
   );
 }
