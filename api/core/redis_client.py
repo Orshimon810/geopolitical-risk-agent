@@ -17,7 +17,8 @@ async def get_redis() -> aioredis.Redis:
     """Return the shared async Redis client, initialising it on first call."""
     global _redis
     if _redis is None:
-        _redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+        ssl_kwargs = {"ssl_cert_reqs": None} if settings.redis_url.startswith("rediss://") else {}
+        _redis = aioredis.from_url(settings.redis_url, decode_responses=True, **ssl_kwargs)
     return _redis
 
 

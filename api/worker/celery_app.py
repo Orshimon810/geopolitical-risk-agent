@@ -9,6 +9,8 @@ Start the worker (from project root):
     celery -A api.worker.celery_app worker --loglevel=info --concurrency=2
 """
 
+import ssl
+
 from celery import Celery
 
 from georisk_agent.app.config import settings
@@ -19,6 +21,8 @@ celery_app = Celery(
     backend=settings.result_backend,
     include=["api.worker.tasks"],
 )
+
+_ssl_options = {"ssl_cert_reqs": ssl.CERT_NONE}
 
 celery_app.conf.update(
     # Serialisation
@@ -35,4 +39,7 @@ celery_app.conf.update(
     # Acknowledge the task only after it finishes (success or explicit failure).
     # Prevents silent data loss if the worker process is killed mid-execution.
     task_acks_late=True,
+    # rediss:// (TLS) requires explicit ssl_cert_reqs; falls back to no-op for plain redis://
+    broker_use_ssl=_ssl_options if settings.broker_url.startswith("rediss://") else None,
+    redis_backend_use_ssl=_ssl_options if settings.result_backend.startswith("rediss://") else None,
 )
