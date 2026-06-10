@@ -41,7 +41,7 @@ services:
       - key: DATABASE_URL
         sync: false        # postgresql+asyncpg://user:pass@ep-xxx.neon.tech/dbname?sslmode=require
       - key: JWT_SECRET_KEY
-        generateValue: true   # Render generates a strong random secret automatically
+        sync: false        # generate with: python -c "import secrets; print(secrets.token_hex(32))"
       - key: JWT_ALGORITHM
         value: HS256
       - key: ACCESS_TOKEN_EXPIRE_MINUTES
@@ -66,13 +66,15 @@ services:
   - type: worker
     name: georisk-worker
     runtime: docker
-    dockerfilePath: ./Dockerfile.worker
+    dockerfilePath: ./Dockerfile.api
     dockerContext: .
     plan: starter          # $7/month
     autoDeploy: true
     envVars:
       - key: APP_ENV
         value: prod
+      - key: WORKER_MODE
+        value: "1"
       - key: OPENAI_API_KEY
         sync: false
       - key: DATABASE_URL
