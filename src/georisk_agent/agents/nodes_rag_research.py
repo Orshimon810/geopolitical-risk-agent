@@ -1,8 +1,11 @@
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Tuple
 
 from georisk_agent.app.types import AgentState, Evidence
 from georisk_agent.rag.retriever import retrieve, retrieve_ephemeral
+
+logger = logging.getLogger(__name__)
 
 
 def rag_research_node(state: AgentState) -> AgentState:
@@ -57,8 +60,10 @@ def rag_research_node(state: AgentState) -> AgentState:
             evidence.append({"title": sub_question, "url": source, "snippet": text})
 
     # Live news chunks — tagged so the LLM knows they are recent
+    live_count = 0
     for sub_question in plan:
-        for c in raw_live.get(sub_question, []):
+        sq_live = raw_live.get(sub_question, [])
+        for c in sq_live:
             text = c.get("text", "") or ""
             url = c.get("url", "") or ""
             title = c.get("title", sub_question) or sub_question
@@ -70,6 +75,15 @@ def rag_research_node(state: AgentState) -> AgentState:
             tagged_source = f"[LIVE NEWS] {source_name}"
             retrieved_chunks.append({"question": sub_question, "text": text, "source": tagged_source})
             evidence.append({"title": title, "url": url or tagged_source, "snippet": text})
+            live_count += 1
+
+    hist_count = sum(len(raw_historical.get(sq, [])) for sq in plan)
+    logger.info(
+        "RAG blend | sub-questions=%d | historical=%d | live=%d | total_evidence=%d",
+        len(plan), hist_count, live_count, len(retrieved_chunks),
+    )
+    if live_count == 0:
+        logger.info("RAG blend | no live chunks passed cosine threshold (ephemeral table may be empty or no relevant news)")
 
     return {
         **state,
