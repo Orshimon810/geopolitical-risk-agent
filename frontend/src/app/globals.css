@@ -53,6 +53,9 @@ html.light .terminal-window {
   background: #f8f8f8;
   border-color: #e0e0e0;
   box-shadow: 0 0 0 1px #ececec, 0 25px 50px -12px rgba(0,0,0,0.08);
+  /* re-map near-invisible decorative elements (arrows, separators) for light bg */
+  --color-slate-800: #c0c0c0;
+  --color-slate-700: #909090;
 }
 html.light .terminal-titlebar {
   background: #efefef;
@@ -222,3 +225,19 @@ body {
   to   { opacity: 1; transform: translateY(0); }
 }
 .fade-up { animation: fade-up 0.35s ease forwards; }
+
+/* ── Respect prefers-reduced-motion ── */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .cursor-blink,
+  .pulse-active,
+  .fade-up {
+    animation: none !important;
+    opacity: 1;
+    transform: none;
+  }
+}

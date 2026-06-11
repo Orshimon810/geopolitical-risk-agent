@@ -198,6 +198,7 @@ cython_debug/
 
 # Claude Code
 .claude/settings.local.json
+.claude/skills/
 
 # Local notes (not for version control)
 MISSING_FEATURES.txt

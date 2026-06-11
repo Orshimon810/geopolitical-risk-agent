@@ -84,7 +84,12 @@ export function AgentStepper({ status, error }: AgentStepperProps) {
       </div>
 
       {/* Console body */}
-      <div className="p-5 min-h-52 space-y-3 data-mono text-xs">
+      <div
+        role="log"
+        aria-label="Pipeline execution log"
+        aria-live="polite"
+        className="p-5 min-h-52 space-y-3 data-mono text-xs"
+      >
         {/* Boot header */}
         <div className="space-y-0.5">
           <p className="text-slate-600">GeoRisk Agent v1.0 — LangGraph Pipeline Executor</p>

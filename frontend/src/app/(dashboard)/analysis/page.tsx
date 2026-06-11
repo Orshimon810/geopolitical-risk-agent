@@ -121,7 +121,7 @@ export default function AnalysisPage() {
                 <button
                   key={q}
                   onClick={() => setQuery(q)}
-                  className="rounded-md border border-slate-700 px-2.5 py-1 text-xs text-slate-400 hover:border-blue-600/50 hover:text-blue-400 transition-colors text-left"
+                  className="rounded-md border border-slate-700 px-2.5 py-1 text-xs text-slate-400 hover:border-blue-600/50 hover:text-blue-400 transition-colors text-left cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-500/50"
                 >
                   {q.slice(0, 60)}…
                 </button>
