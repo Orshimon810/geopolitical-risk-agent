@@ -43,6 +43,14 @@ class Settings(BaseModel):
     smtp_from: str = os.getenv("SMTP_FROM", "onboarding@resend.dev")
     frontend_url: str = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
+    # --- Ephemeral news cache ---
+    # Provider: "newsapi" (newsapi.org) or "finnhub" (finnhub.io)
+    news_provider: str = os.getenv("NEWS_PROVIDER", "newsapi")
+    newsapi_key: str = os.getenv("NEWSAPI_KEY", "")
+    finnhub_api_key: str = os.getenv("FINNHUB_API_KEY", "")
+    # How long (hours) a news article lives in ephemeral_embeddings before being flushed
+    ephemeral_ttl_hours: int = int(os.getenv("EPHEMERAL_TTL_HOURS", "48"))
+
     @property
     def is_prod(self) -> bool:
         return self.app_env == "prod"

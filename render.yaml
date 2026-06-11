@@ -87,6 +87,12 @@ services:
         sync: false
       - key: MODEL_NAME
         value: gpt-4o-mini
+      - key: NEWSAPI_KEY
+        sync: false        # get a free key at https://newsapi.org/register
+      - key: NEWS_PROVIDER
+        value: newsapi
+      - key: EPHEMERAL_TTL_HOURS
+        value: "48"
 
   # ---------------------------------------------------------------------------
   # Frontend — Next.js (standalone build)

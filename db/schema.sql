@@ -164,6 +164,47 @@ COMMENT ON COLUMN analysis_history.user_id  IS 'NULL for anonymous invocations (
 
 
 -- ============================================================================
+-- TABLE: ephemeral_embeddings
+-- Short-lived news article embeddings for live-memory context enrichment.
+-- Rows expire after EPHEMERAL_TTL_HOURS (default 48h) and are purged by the
+-- daily Celery beat task. The retriever also filters by expires_at at query
+-- time, so stale rows never appear in results even before the flush runs.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS ephemeral_embeddings (
+    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    -- sha256(url) — stable dedup key; re-ingesting the same article is safe
+    chunk_id        TEXT        NOT NULL,
+
+    source          TEXT        NOT NULL,           -- news outlet name (e.g. "Reuters")
+    url             TEXT        NOT NULL,           -- canonical article URL
+    title           TEXT        NOT NULL,
+    text            TEXT        NOT NULL,           -- title + description, fed to the LLM
+    embedding       vector(1536) NOT NULL,          -- text-embedding-3-small output
+
+    published_at    TIMESTAMPTZ NOT NULL,
+    expires_at      TIMESTAMPTZ NOT NULL,           -- ingested_at + EPHEMERAL_TTL_HOURS
+    ingested_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT uq_ephemeral_chunk_id UNIQUE (chunk_id)
+);
+
+-- B-tree on expires_at for the daily flush DELETE and the WHERE expires_at > NOW() filter
+CREATE INDEX IF NOT EXISTS idx_ephemeral_expires
+    ON ephemeral_embeddings (expires_at);
+
+-- HNSW index for approximate nearest-neighbor search (cosine distance)
+CREATE INDEX IF NOT EXISTS idx_ephemeral_hnsw
+    ON ephemeral_embeddings
+    USING hnsw (embedding vector_cosine_ops)
+    WITH (m = 16, ef_construction = 64);
+
+COMMENT ON TABLE  ephemeral_embeddings              IS 'Live news article embeddings; rows expire after 48h (configurable).';
+COMMENT ON COLUMN ephemeral_embeddings.chunk_id     IS 'sha256(url) — dedup key for idempotent re-ingestion.';
+COMMENT ON COLUMN ephemeral_embeddings.expires_at   IS 'Set to ingested_at + EPHEMERAL_TTL_HOURS; rows past this are invisible to retrieval.';
+
+
+-- ============================================================================
 -- TABLE: password_reset_tokens
 -- One-time tokens for the forgot-password flow. Expires after 1 hour.
 -- Any unused token for a user is replaced when a new request is made.
