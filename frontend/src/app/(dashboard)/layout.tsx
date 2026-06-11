@@ -26,7 +26,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   // Close mobile sidebar on route change
   useEffect(() => {
-    setMobileOpen(false);
+    const t = setTimeout(() => setMobileOpen(false), 0);
+    return () => clearTimeout(t);
   }, [pathname]);
 
   if (isLoading) {
@@ -53,6 +54,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <Navbar
           title={title}
           onMobileSidebarOpen={() => setMobileOpen(true)}
+          mobileOpen={mobileOpen}
         />
         <main className="flex-1 overflow-y-auto p-4 md:p-5">{children}</main>
       </div>
