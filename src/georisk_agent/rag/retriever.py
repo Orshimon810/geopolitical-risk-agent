@@ -25,7 +25,7 @@ from openai import OpenAI
 
 from georisk_agent.app.config import settings
 from georisk_agent.db.client import get_session
-from georisk_agent.db.dal import semantic_search
+from georisk_agent.db.dal import semantic_search, semantic_search_ephemeral
 
 logger = logging.getLogger(__name__)
 
@@ -118,3 +118,35 @@ def retrieve(query: str, k: int = 5) -> list[dict[str, Any]]:
 
     results = _run_async(_search())
     return [{"text": r["text"], "source": r["source"]} for r in results]
+
+
+def retrieve_ephemeral(query: str, k: int = 2, max_distance: float = 0.35) -> list[dict[str, Any]]:
+    """
+    Retrieve the top-k live news chunks from ephemeral_embeddings.
+
+    Only returns non-expired rows that pass the cosine distance threshold
+    (max_distance=0.35 means similarity > 0.65 — genuinely on-topic news only).
+
+    Returns a list of dicts: {"text", "source", "title", "url", "live": True}
+    Returns [] if the table is empty or no news is relevant to the query.
+    """
+    if not settings.database_url:
+        return []
+
+    embedding = _embed(query)
+
+    async def _search() -> list[dict[str, Any]]:
+        async with get_session() as session:
+            return await semantic_search_ephemeral(session, embedding, k=k, max_distance=max_distance)
+
+    results = _run_async(_search())
+    return [
+        {
+            "text": r["text"],
+            "source": r["source"],
+            "title": r["title"],
+            "url": r["url"],
+            "live": True,
+        }
+        for r in results
+    ]

@@ -174,6 +174,43 @@ class AnalysisHistory(Base):
 
 
 # =============================================================================
+# Ephemeral News Embeddings
+# =============================================================================
+
+class EphemeralNewsEmbedding(Base):
+    __tablename__ = "ephemeral_embeddings"
+    __table_args__ = (
+        Index(
+            "idx_ephemeral_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_with={"m": 16, "ef_construction": 64},
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+        Index("idx_ephemeral_expires", "expires_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    # sha256(url) — dedup key so re-ingesting the same article URL is idempotent
+    chunk_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    source: Mapped[str] = mapped_column(Text, nullable=False, index=True)  # news outlet name
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)  # title + description/summary
+    embedding: Mapped[list[float]] = mapped_column(Vector(1536), nullable=False)
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ingested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+    def __repr__(self) -> str:
+        return f"<EphemeralNewsEmbedding source={self.source!r} title={self.title[:40]!r}>"
+
+
+# =============================================================================
 # Password Reset Tokens
 # =============================================================================
 

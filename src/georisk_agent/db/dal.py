@@ -24,7 +24,7 @@ from sqlalchemy import delete, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from georisk_agent.db.models import AnalysisHistory, GeopoliticalEmbedding, PasswordResetToken, User
+from georisk_agent.db.models import AnalysisHistory, EphemeralNewsEmbedding, GeopoliticalEmbedding, PasswordResetToken, User
 
 logger = logging.getLogger(__name__)
 
@@ -279,6 +279,117 @@ async def semantic_search(
         }
         for row in rows
     ]
+
+
+# =============================================================================
+# Ephemeral news embeddings
+# =============================================================================
+
+async def upsert_ephemeral_embedding(
+    session: AsyncSession,
+    *,
+    chunk_id: str,
+    source: str,
+    url: str,
+    title: str,
+    text_content: str,
+    embedding: list[float],
+    published_at: datetime,
+    expires_at: datetime,
+) -> None:
+    """
+    Insert or update a single ephemeral news embedding.
+    ON CONFLICT on chunk_id (sha256 of URL) is idempotent — safe to re-ingest.
+    """
+    stmt = (
+        pg_insert(EphemeralNewsEmbedding)
+        .values(
+            chunk_id=chunk_id,
+            source=source,
+            url=url,
+            title=title,
+            text=text_content,
+            embedding=embedding,
+            published_at=published_at,
+            expires_at=expires_at,
+        )
+        .on_conflict_do_update(
+            index_elements=["chunk_id"],
+            set_={
+                "title": title,
+                "text": text_content,
+                "embedding": embedding,
+                "expires_at": expires_at,
+                "ingested_at": datetime.now(timezone.utc),
+            },
+        )
+    )
+    await session.execute(stmt)
+
+
+async def semantic_search_ephemeral(
+    session: AsyncSession,
+    query_embedding: list[float],
+    k: int = 2,
+    max_distance: float = 0.35,
+) -> list[dict[str, Any]]:
+    """
+    Retrieve the top-k live news chunks within the cosine distance threshold.
+
+    Only returns non-expired rows (expires_at > NOW()).
+    max_distance is a cosine distance ceiling — 0.35 ≈ similarity > 0.65,
+    ensuring only genuinely relevant recent news is returned.
+    """
+    vec_literal = "[" + ",".join(f"{v:.8f}" for v in query_embedding) + "]"
+    params: dict[str, Any] = {"vec": vec_literal, "k": k, "max_dist": max_distance}
+
+    sql = text("""
+        SELECT
+            chunk_id,
+            source,
+            url,
+            title,
+            text,
+            published_at,
+            1 - (embedding <=> CAST(:vec AS vector)) AS similarity
+        FROM
+            ephemeral_embeddings
+        WHERE
+            expires_at > NOW()
+            AND (embedding <=> CAST(:vec AS vector)) < :max_dist
+        ORDER BY
+            embedding <=> CAST(:vec AS vector)
+        LIMIT :k
+    """)
+
+    result = await session.execute(sql, params)
+    rows = result.mappings().all()
+
+    return [
+        {
+            "chunk_id": row["chunk_id"],
+            "source": row["source"],
+            "url": row["url"],
+            "title": row["title"],
+            "text": row["text"],
+            "published_at": row["published_at"],
+            "similarity": float(row["similarity"]),
+        }
+        for row in rows
+    ]
+
+
+async def flush_expired_ephemeral(session: AsyncSession) -> int:
+    """Delete all expired ephemeral news rows. Returns the number of deleted rows."""
+    result = await session.execute(
+        delete(EphemeralNewsEmbedding).where(
+            EphemeralNewsEmbedding.expires_at <= datetime.now(timezone.utc)
+        )
+    )
+    count = result.rowcount  # type: ignore[assignment]
+    if count:
+        logger.info("Flushed %d expired ephemeral news rows", count)
+    return count
 
 
 # =============================================================================

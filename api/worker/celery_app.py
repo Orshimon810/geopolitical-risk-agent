@@ -12,6 +12,7 @@ Start the worker (from project root):
 import ssl
 
 from celery import Celery
+from celery.schedules import crontab
 
 from georisk_agent.app.config import settings
 
@@ -19,7 +20,7 @@ celery_app = Celery(
     "georisk_worker",
     broker=settings.broker_url,
     backend=settings.result_backend,
-    include=["api.worker.tasks"],
+    include=["api.worker.tasks", "api.worker.news_tasks"],
 )
 
 _ssl_options = {"ssl_cert_reqs": ssl.CERT_NONE}
@@ -43,3 +44,20 @@ celery_app.conf.update(
     broker_use_ssl=_ssl_options if settings.broker_url.startswith("rediss://") else None,
     redis_backend_use_ssl=_ssl_options if settings.result_backend.startswith("rediss://") else None,
 )
+
+# ---------------------------------------------------------------------------
+# Periodic beat schedule — ephemeral news cache maintenance
+# ---------------------------------------------------------------------------
+celery_app.conf.beat_schedule = {
+    # Poll and embed fresh geopolitical/financial news every 4 hours
+    "poll-news-every-4h": {
+        "task": "tasks.poll_and_ingest_news",
+        "schedule": crontab(minute=0, hour="*/4"),
+    },
+    # Purge expired ephemeral rows daily at 03:30 UTC (low-traffic window)
+    "flush-expired-ephemeral-daily": {
+        "task": "tasks.flush_expired_ephemeral",
+        "schedule": crontab(minute=30, hour=3),
+    },
+}
+celery_app.conf.timezone = "UTC"
