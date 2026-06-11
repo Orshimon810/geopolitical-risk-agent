@@ -60,10 +60,6 @@ class User(Base):
     full_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     tier: Mapped[str] = mapped_column(String(20), nullable=False, default="free")
-    daily_query_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    daily_reset_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=_utcnow
-    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
     )
@@ -106,9 +102,8 @@ class GeopoliticalEmbedding(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    # Stable deduplication key — set to the original Chroma doc ID during migration,
-    # or to sha256(text) for new ingestions. ON CONFLICT on this column enables
-    # idempotent re-ingestion.
+    # Stable deduplication key — sha256(text) for new ingestions.
+    # ON CONFLICT on this column enables idempotent re-ingestion.
     chunk_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     source: Mapped[str] = mapped_column(Text, nullable=False, index=True)
     text: Mapped[str] = mapped_column(Text, nullable=False)

@@ -158,8 +158,8 @@ async def bulk_upsert_embeddings(
 
     Returns the total number of records processed.
 
-    Batch size of 64 matches the ChromaDB ingest batch size and keeps individual
-    PG statements under the ~32k parameter limit (64 records × ~25 params each).
+    Batch size of 64 keeps individual PG statements under the ~32k parameter limit
+    (64 records × ~25 params each).
     """
     total = 0
     for batch_start in range(0, len(records), batch_size):
