@@ -120,12 +120,13 @@ def retrieve(query: str, k: int = 5) -> list[dict[str, Any]]:
     return [{"text": r["text"], "source": r["source"]} for r in results]
 
 
-def retrieve_ephemeral(query: str, k: int = 2, max_distance: float = 0.35) -> list[dict[str, Any]]:
+def retrieve_ephemeral(query: str, k: int = 2, max_distance: float = 0.45) -> list[dict[str, Any]]:
     """
     Retrieve the top-k live news chunks from ephemeral_embeddings.
 
     Only returns non-expired rows that pass the cosine distance threshold
-    (max_distance=0.35 means similarity > 0.65 — genuinely on-topic news only).
+    (max_distance=0.45 means similarity > 0.55 — on-topic news only).
+    Empirically calibrated: Iran/energy news scores ~0.40 against related queries.
 
     Returns a list of dicts: {"text", "source", "title", "url", "live": True}
     Returns [] if the table is empty or no news is relevant to the query.
