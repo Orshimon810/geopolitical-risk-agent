@@ -43,7 +43,13 @@ class AnalysisOutput(BaseModel):
     )
     sources: list[str] = Field(
         default_factory=list,
-        description="Source citations referenced in the analysis."
+        description=(
+            "Source citations used in the analysis. "
+            "For any evidence item tagged '[LIVE NEWS]', cite the exact outlet name "
+            "(e.g. 'BeInCrypto — Iran ceasefire market reaction', 'Yahoo Finance — Oil markets'). "
+            "For historical corpus items, cite the document or dataset name. "
+            "Never use generic placeholders like 'Market analysis reports' or 'Bloomberg; Datastream'."
+        )
     )
 
 
@@ -110,7 +116,9 @@ def _format_evidence(
     for i, c in enumerate(retrieved_chunks[:max_items], 1):
         txt = (c.get("text") or "").replace("\n", " ")
         txt = txt[:240] + "..." if len(txt) > 240 else txt
-        lines.append(f"[{i}] {txt}")
+        source = c.get("source", "")
+        source_tag = f" ({source})" if source else ""
+        lines.append(f"[{i}]{source_tag} {txt}")
     return "\n".join(lines)
 
 
@@ -197,6 +205,11 @@ Scenario discipline:
 - Provide exactly 2 scenarios: base case and escalation case.
 - Explicitly note any timing mismatch between
   market reactions and real economic impacts.
+
+Source citation discipline:
+- Evidence items tagged "[LIVE NEWS]" are real recent news articles — cite them by outlet name.
+- Example: "[LIVE NEWS] BeInCrypto" → cite as "BeInCrypto — Iran ceasefire market reaction".
+- Never replace real source names with generic labels like "Bloomberg" or "Market analysis reports".
 """
 
     output: AnalysisOutput = structured_llm.invoke(prompt)
