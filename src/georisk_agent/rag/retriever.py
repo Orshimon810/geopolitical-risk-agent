@@ -1,7 +1,6 @@
 """
-RAG retriever — backed by pgvector (Neon) instead of local ChromaDB.
+RAG retriever — backed by pgvector (Neon).
 
-Public interface is identical to the old Chroma-backed version:
     retrieve(query, k) -> list[{"text": str, "source": str}]
 
 Threading model
@@ -103,8 +102,6 @@ def retrieve(query: str, k: int = 5) -> list[dict[str, Any]]:
     Retrieve the top-k most semantically relevant chunks for a query.
 
     Returns a list of dicts: {"text": str, "source": str}
-    Identical contract to the old Chroma-backed retriever so rag_research_node
-    and all callers require zero changes.
     """
     if not settings.database_url:
         logger.warning(
