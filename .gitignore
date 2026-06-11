@@ -204,6 +204,7 @@ cython_debug/
 MISSING_FEATURES.txt
 FEATURE_*.txt
 SESSION_*.txt
+*.txt
 
 # MCP config (contains API keys)
 .mcp.json
