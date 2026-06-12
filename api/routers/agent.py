@@ -158,30 +158,16 @@ async def _auto_approve(
     redis_client: aioredis.Redis,
 ) -> None:
     """
-    Inject the original sub-questions into the suspended checkpoint and
-    dispatch Task B. Called when the HITL timeout fires.
+    Auto-approve the original plan when the HITL timeout fires.
+    Sets approved_plan = sub_questions in Redis and dispatches Task B.
+    No checkpointer needed — Task B reads the approved plan from task state.
     """
     sub_questions = task_state.get("sub_questions", [])
     user_id       = task_state.get("user_id", "")
 
-    try:
-        from georisk_agent.agents.graph import build_graph, get_redis_saver
-
-        config = {"configurable": {"thread_id": task_id}}
-        with get_redis_saver() as saver:
-            graph = build_graph(checkpointer=saver)
-            graph.update_state(
-                config,
-                {"user_approved_plan": sub_questions, "hitl_status": "BYPASSED"},
-                as_node="planner",
-            )
-    except Exception as exc:
-        logger.warning("Auto-approve graph.update_state failed: %s", exc)
-
-    resume_geopolitical_agent_task.apply_async(args=[task_id, user_id])
-
-    updated = {**task_state, "status": "PROCESSING"}
+    updated = {**task_state, "status": "PROCESSING", "approved_plan": sub_questions}
     await redis_client.setex(f"task:{task_id}", _TASK_TTL_SECONDS, json.dumps(updated))
+    resume_geopolitical_agent_task.apply_async(args=[task_id, user_id])
 
 
 @router.post(
@@ -211,29 +197,15 @@ async def approve_plan(
     if task_state.get("user_id") != str(current_user.id):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not your task")
 
-    # Inject user edits into the suspended graph checkpoint
-    try:
-        from georisk_agent.agents.graph import build_graph, get_redis_saver
-
-        config = {"configurable": {"thread_id": task_id}}
-        with get_redis_saver() as saver:
-            graph = build_graph(checkpointer=saver)
-            graph.update_state(
-                config,
-                {"user_approved_plan": body.sub_questions, "hitl_status": "APPROVED"},
-                as_node="planner",
-            )
-    except Exception as exc:
-        logger.error("approve_plan: graph.update_state failed: %s", exc, exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to update plan in graph checkpoint",
-        )
-
-    resume_geopolitical_agent_task.apply_async(args=[task_id, str(current_user.id)])
-
-    updated = {**task_state, "status": "PROCESSING"}
+    # Store the approved plan in task state — Task B reads it from there.
+    # No graph checkpointer needed.
+    updated = {
+        **task_state,
+        "status": "PROCESSING",
+        "approved_plan": body.sub_questions,
+    }
     await redis_client.setex(f"task:{task_id}", _TASK_TTL_SECONDS, json.dumps(updated))
+    resume_geopolitical_agent_task.apply_async(args=[task_id, str(current_user.id)])
 
     logger.info(
         "Task %s approved by user=%s | sub_questions=%d",
