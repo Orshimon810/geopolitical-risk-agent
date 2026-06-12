@@ -1,22 +1,20 @@
 """
 Celery background tasks.
 
-Two-task pattern for HITL (Human-in-the-Loop) support:
+Two-task HITL pattern (no external checkpointer — Redis-only):
 
   run_geopolitical_agent_task   (Task A)
-    Runs the planner node, then pauses at the interrupt_after=["planner"]
-    breakpoint. Writes WAITING_FOR_INPUT to Redis with the generated
-    sub-questions so the frontend can show them for review.
+    Calls the planner node directly to generate sub-questions, then writes
+    WAITING_FOR_INPUT to Redis. No LangGraph checkpointer needed — the plan
+    is stored as plain JSON in the existing task state key.
 
   resume_geopolitical_agent_task  (Task B)
-    Loaded by the approve-plan endpoint after the user confirms/edits the
-    sub-questions. Resumes the graph from the Redis checkpoint and runs
-    rag_research → signals → analysis → reviewer → final_output.
-    Writes SUCCESS (or FAILED) to Redis and persists the result to the DB.
+    Reads the approved plan from Redis, builds a resume graph that starts at
+    rag_research (skipping the planner), and runs the full pipeline through
+    to final_output. Writes SUCCESS/FAILED to Redis and persists to the DB.
 
-Both tasks share the same task_id (= LangGraph thread_id) so the client
-can keep polling the same GET /agent/tasks/{task_id} endpoint throughout
-the entire HITL flow without any changes to the polling logic.
+Both tasks share the same task_id so the client polls the same endpoint
+throughout the entire flow.
 """
 
 import asyncio
@@ -35,7 +33,7 @@ from georisk_agent.app.config import settings
 
 logger = logging.getLogger(__name__)
 
-_TASK_TTL_SECONDS = 86_400  # 24 hours — keep in sync with agent.py
+_TASK_TTL_SECONDS = 86_400  # 24 hours
 
 
 def _sync_redis() -> sync_redis.Redis:
@@ -51,26 +49,20 @@ def _patch_task_state(r: sync_redis.Redis, task_id: str, patch: dict) -> None:
 
 
 def _extract_result(values: dict) -> dict[str, Any]:
-    """Extract the 7 API-facing fields from a completed graph state."""
     return {
-        "market_impacts":    values.get("market_impacts", []),
-        "risks":             values.get("risks", []),
-        "scenarios":         values.get("scenarios", []),
-        "investor_takeaway": values.get("investor_takeaway", []),
-        "confidence":        values.get("confidence", "Low"),
-        "sources":           values.get("sources", []),
-        "signals":           values.get("signals", {}),
-        "review_log":        values.get("review_log", []),
+        "market_impacts":      values.get("market_impacts", []),
+        "risks":               values.get("risks", []),
+        "scenarios":           values.get("scenarios", []),
+        "investor_takeaway":   values.get("investor_takeaway", []),
+        "confidence":          values.get("confidence", "Low"),
+        "sources":             values.get("sources", []),
+        "signals":             values.get("signals", {}),
+        "review_log":          values.get("review_log", []),
         "data_contradictions": values.get("data_contradictions", []),
     }
 
 
 def _persist_analysis(*, user_id: str, query: str, result: dict[str, Any]) -> None:
-    """
-    Persist a completed analysis to the DB.
-    Runs asyncio.run() inside a dedicated thread to avoid "event loop already running"
-    errors when called from inside a Celery worker.
-    """
     import concurrent.futures
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
     from georisk_agent.db.dal import save_analysis
@@ -110,24 +102,20 @@ def _persist_analysis(*, user_id: str, query: str, result: dict[str, Any]) -> No
 @celery_app.task(bind=True, name="tasks.run_geopolitical_agent")
 def run_geopolitical_agent_task(self, query: str, user_id: str) -> dict:
     """
-    Task A — runs the planner node and pauses at the HITL breakpoint.
-
-    State machine written to Redis:
-        PENDING           — set by the API endpoint before dispatching
-        PROCESSING        — set as soon as the worker picks up the task
-        WAITING_FOR_INPUT — set after the planner pauses; includes sub_questions
+    Task A — runs the planner node and writes WAITING_FOR_INPUT to Redis.
+    No external checkpointer: the plan is stored as plain JSON in task state.
     """
     task_id = self.request.id
     r = _sync_redis()
 
     _patch_task_state(r, task_id, {"status": "PROCESSING"})
-    logger.info("Task %s PROCESSING (run_to_breakpoint) | user=%s | query=%r", task_id, user_id, query[:120])
+    logger.info("Task %s PROCESSING | user=%s | query=%r", task_id, user_id, query[:120])
 
     try:
-        from georisk_agent.agents.graph import build_graph, get_redis_saver
+        from georisk_agent.agents.nodes_planner import planner_node
 
-        config = {"configurable": {"thread_id": task_id}}
-        initial_state = {
+        # Call the planner node directly — no graph, no checkpointer
+        initial_state: dict = {
             "query": query,
             "retry_count": 0,
             "max_retries": settings.max_retries,
@@ -136,21 +124,13 @@ def run_geopolitical_agent_task(self, query: str, user_id: str) -> dict:
             "rewritten_queries": [],
             "data_contradictions": [],
         }
-
-        with get_redis_saver() as saver:
-            graph = build_graph(checkpointer=saver)
-
-            # stream() runs the planner, then pauses at interrupt_after=["planner"].
-            for _event in graph.stream(initial_state, config):
-                pass
-
-            snapshot = graph.get_state(config)
-        sub_questions = snapshot.values.get("plan", [])
+        after_planner = planner_node(initial_state)
+        sub_questions = after_planner.get("plan", [])
 
         _patch_task_state(r, task_id, {
             "status": "WAITING_FOR_INPUT",
             "sub_questions": sub_questions,
-            "thread_id": task_id,
+            "approved_plan": sub_questions,   # default; overwritten by approve-plan endpoint
             "user_id": user_id,
             "query": query,
             "waiting_since": datetime.now(timezone.utc).isoformat(),
@@ -165,48 +145,51 @@ def run_geopolitical_agent_task(self, query: str, user_id: str) -> dict:
             "error": error_msg,
             "completed_at": datetime.now(timezone.utc).isoformat(),
         })
-        logger.error("Task %s FAILED (run_to_breakpoint): %s", task_id, error_msg, exc_info=True)
+        logger.error("Task %s FAILED (planner): %s", task_id, error_msg, exc_info=True)
         raise
 
 
 @celery_app.task(bind=True, name="tasks.resume_geopolitical_agent")
 def resume_geopolitical_agent_task(self, original_task_id: str, user_id: str) -> dict:
     """
-    Task B — resumes the graph from the Redis checkpoint after HITL approval.
-
-    Picks up at rag_research → signals → analysis → reviewer loop → final_output.
-    Writes SUCCESS (or FAILED) to Redis and persists the result to the DB.
+    Task B — resumes analysis after HITL approval.
+    Reads the approved plan from Redis task state, then invokes build_resume_graph()
+    which starts at rag_research (skipping the planner entirely).
     """
     r = _sync_redis()
 
     _patch_task_state(r, original_task_id, {"status": "PROCESSING"})
     logger.info("Task %s PROCESSING (resume) | user=%s", original_task_id, user_id)
 
-    # Read query from the stored task state for caching and persistence
     raw = r.get(f"task:{original_task_id}")
     task_state = json.loads(raw) if raw else {}
-    query = task_state.get("query", "")
+    query         = task_state.get("query", "")
+    approved_plan = task_state.get("approved_plan") or task_state.get("sub_questions", [])
 
     try:
-        from georisk_agent.agents.graph import build_graph, get_redis_saver
+        from georisk_agent.agents.graph import build_resume_graph
 
-        config = {"configurable": {"thread_id": original_task_id}}
+        graph = build_resume_graph()
+        initial_state: dict = {
+            "query":             query,
+            "plan":              task_state.get("sub_questions", []),
+            "user_approved_plan": approved_plan,
+            "hitl_status":       "APPROVED",
+            "retry_count":       0,
+            "max_retries":       settings.max_retries,
+            "review_log":        [],
+            "rewritten_queries": [],
+            "data_contradictions": [],
+        }
 
-        with get_redis_saver() as saver:
-            graph = build_graph(checkpointer=saver)
-
-            # Passing None as input resumes from the last checkpoint.
-            for _event in graph.stream(None, config):
-                pass
-
-            snapshot = graph.get_state(config)
-        result = _extract_result(snapshot.values)
+        final_state: dict = graph.invoke(initial_state)
+        result = _extract_result(final_state)
 
         _patch_task_state(r, original_task_id, {
-            "status": "SUCCESS",
-            "result": result,
+            "status":       "SUCCESS",
+            "result":       result,
             "completed_at": datetime.now(timezone.utc).isoformat(),
-            "cached": False,
+            "cached":       False,
         })
         logger.info("Task %s SUCCESS (resume)", original_task_id)
 
@@ -223,8 +206,8 @@ def resume_geopolitical_agent_task(self, original_task_id: str, user_id: str) ->
     except Exception as exc:
         error_msg = f"{type(exc).__name__}: {exc}"
         _patch_task_state(r, original_task_id, {
-            "status": "FAILED",
-            "error": error_msg,
+            "status":       "FAILED",
+            "error":        error_msg,
             "completed_at": datetime.now(timezone.utc).isoformat(),
         })
         logger.error("Task %s FAILED (resume): %s", original_task_id, error_msg, exc_info=True)
