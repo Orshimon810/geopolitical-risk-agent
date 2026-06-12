@@ -54,8 +54,13 @@ class Settings(BaseModel):
     # --- Dynamic pipeline (Reviewer loop + HITL) ---
     # Max reviewer retries per analysis run (0 = reviewer runs but never retries)
     max_retries: int = int(os.getenv("MAX_RETRIES", "1"))
-    # Dedicated Redis DB for LangGraph checkpoints (keep separate from task state / Celery)
-    langgraph_redis_url: str = os.getenv("LANGGRAPH_REDIS_URL", "redis://localhost:6379/3")
+    # Redis URL for LangGraph checkpoints. Defaults to REDIS_URL (DB 0) so single-DB
+    # providers (Upstash free tier) work out of the box. RedisSaver uses "checkpoint:"
+    # and "checkpoint_write:" key prefixes that don't collide with other app keys.
+    langgraph_redis_url: str = os.getenv(
+        "LANGGRAPH_REDIS_URL",
+        os.getenv("REDIS_URL", "redis://localhost:6379/0"),
+    )
     # Minutes before a WAITING_FOR_INPUT task is auto-approved with the original plan
     hitl_timeout_minutes: int = int(os.getenv("HITL_TIMEOUT_MINUTES", "10"))
 
