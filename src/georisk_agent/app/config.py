@@ -51,6 +51,14 @@ class Settings(BaseModel):
     # How long (hours) a news article lives in ephemeral_embeddings before being flushed
     ephemeral_ttl_hours: int = int(os.getenv("EPHEMERAL_TTL_HOURS", "48"))
 
+    # --- Dynamic pipeline (Reviewer loop + HITL) ---
+    # Max reviewer retries per analysis run (0 = reviewer runs but never retries)
+    max_retries: int = int(os.getenv("MAX_RETRIES", "1"))
+    # Dedicated Redis DB for LangGraph checkpoints (keep separate from task state / Celery)
+    langgraph_redis_url: str = os.getenv("LANGGRAPH_REDIS_URL", "redis://localhost:6379/3")
+    # Minutes before a WAITING_FOR_INPUT task is auto-approved with the original plan
+    hitl_timeout_minutes: int = int(os.getenv("HITL_TIMEOUT_MINUTES", "10"))
+
     @property
     def is_prod(self) -> bool:
         return self.app_env == "prod"

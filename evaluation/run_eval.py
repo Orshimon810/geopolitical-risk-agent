@@ -1,16 +1,16 @@
 from collections import Counter
 from benchmark_queries import BENCHMARK_QUERIES
 from evaluator import evaluate_response
-from georisk_agent.agents.graph import build_graph
+from georisk_agent.agents.graph import build_legacy_graph
 
 
-DEBUG = False  
+DEBUG = False
 
 
 def run():
     print("\nBuilding agent graph...\n")
 
-    app = build_graph()
+    app = build_legacy_graph()
 
     scores = []
     ratings = Counter()

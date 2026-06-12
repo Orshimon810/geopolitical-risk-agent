@@ -2,27 +2,33 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Tuple
 
-from georisk_agent.app.types import AgentState, Evidence
+from georisk_agent.app.types import DynamicAgentState, Evidence, SourceQuality
 from georisk_agent.rag.retriever import retrieve, retrieve_ephemeral
 
 logger = logging.getLogger(__name__)
 
 
-def rag_research_node(state: AgentState) -> AgentState:
+def rag_research_node(state: DynamicAgentState) -> DynamicAgentState:
     """
     RAG Research node — blends deep historical corpus with live news.
 
+    Query selection priority (highest wins):
+      1. rewritten_queries  — set by Reviewer on retry cycles
+      2. user_approved_plan — set by graph.update_state() after HITL approval
+      3. plan               — original planner output
+
     Retrieval budget per sub-question:
       - k=3 from geopolitical_embeddings (historical corpus)
-      - k=2 from ephemeral_embeddings (live news, cosine distance < 0.35)
+      - k=2 from ephemeral_embeddings (live news, cosine distance < 0.45)
 
-    Both sources run in parallel across all sub-questions.
-    Live chunks are tagged with "[LIVE NEWS]" in the source field so the
-    analysis LLM can reason about recency vs. established context.
-    Historical chunks are always processed first so they anchor the evidence
-    list; live news appends as incremental signal.
+    After retrieval, populates source_quality so the Reviewer can assess
+    evidence sufficiency without re-reading the chunks.
     """
-    plan: List[str] = state.get("plan", [])
+    rewritten = state.get("rewritten_queries") or []
+    approved  = state.get("user_approved_plan") or []
+    original  = state.get("plan") or []
+    plan: List[str] = rewritten if rewritten else (approved if approved else original)
+
     retrieved_chunks = []
     evidence: List[Evidence] = []
     seen: set[Tuple[str, str]] = set()
@@ -50,9 +56,9 @@ def rag_research_node(state: AgentState) -> AgentState:
     # Historical chunks first — they anchor the evidence list
     for sub_question in plan:
         for c in raw_historical.get(sub_question, []):
-            text = c.get("text", "") or ""
+            text   = c.get("text", "") or ""
             source = c.get("source", "local_corpus") or "local_corpus"
-            key = (source, text)
+            key    = (source, text)
             if not text or key in seen:
                 continue
             seen.add(key)
@@ -62,13 +68,12 @@ def rag_research_node(state: AgentState) -> AgentState:
     # Live news chunks — tagged so the LLM knows they are recent
     live_count = 0
     for sub_question in plan:
-        sq_live = raw_live.get(sub_question, [])
-        for c in sq_live:
-            text = c.get("text", "") or ""
-            url = c.get("url", "") or ""
-            title = c.get("title", sub_question) or sub_question
+        for c in raw_live.get(sub_question, []):
+            text        = c.get("text", "") or ""
+            url         = c.get("url", "") or ""
+            title       = c.get("title", sub_question) or sub_question
             source_name = c.get("source", "Live News") or "Live News"
-            key = (url or source_name, text)
+            key         = (url or source_name, text)
             if not text or key in seen:
                 continue
             seen.add(key)
@@ -78,15 +83,31 @@ def rag_research_node(state: AgentState) -> AgentState:
             live_count += 1
 
     hist_count = sum(len(raw_historical.get(sq, [])) for sq in plan)
+    sub_questions_answered = sum(
+        1 for sq in plan
+        if raw_historical.get(sq) or raw_live.get(sq)
+    )
+
+    source_quality: SourceQuality = {
+        "total_chunks": len(retrieved_chunks),
+        "live_chunks": live_count,
+        "hist_chunks": hist_count,
+        "sub_questions_answered": sub_questions_answered,
+        "avg_cosine_distance": 0.0,
+        "thin_evidence": sub_questions_answered < len(plan),
+    }
+
     logger.info(
-        "RAG blend | sub-questions=%d | historical=%d | live=%d | total_evidence=%d",
-        len(plan), hist_count, live_count, len(retrieved_chunks),
+        "RAG blend | sub-questions=%d | historical=%d | live=%d | total=%d | thin=%s",
+        len(plan), hist_count, live_count, len(retrieved_chunks), source_quality["thin_evidence"],
     )
     if live_count == 0:
-        logger.info("RAG blend | no live chunks passed cosine threshold (ephemeral table may be empty or no relevant news)")
+        logger.info("RAG blend | no live chunks passed cosine threshold")
 
     return {
         **state,
         "retrieved_chunks": retrieved_chunks,
         "evidence": evidence,
+        "source_quality": source_quality,
+        "rewritten_queries": [],   # clear after use so the next cycle starts clean
     }
