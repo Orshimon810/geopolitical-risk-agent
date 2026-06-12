@@ -40,14 +40,18 @@ interface AgentStepperProps {
 export function AgentStepper({ status, error, subQuestions, onApprove }: AgentStepperProps) {
   const [visibleCount, setVisibleCount] = useState(0);
   const [editedQuestions, setEditedQuestions] = useState<string[]>([]);
+  const [prevSubQuestions, setPrevSubQuestions] = useState<string[] | undefined>(undefined);
   const prevStatusRef = useRef<TaskStatus>(status);
 
-  // Seed editable questions when we enter WAITING_FOR_INPUT
-  useEffect(() => {
-    if (status === "WAITING_FOR_INPUT" && subQuestions && subQuestions.length > 0) {
+  // Sync editable questions from props without a useEffect:
+  // When subQuestions changes (prop arrives from polling), update local state during render.
+  // This avoids the cascading-render problem of setState-in-effect.
+  if (subQuestions !== prevSubQuestions) {
+    setPrevSubQuestions(subQuestions);
+    if (subQuestions && subQuestions.length > 0) {
       setEditedQuestions(subQuestions);
     }
-  }, [status, subQuestions]);
+  }
 
   useEffect(() => {
     const prev = prevStatusRef.current;
