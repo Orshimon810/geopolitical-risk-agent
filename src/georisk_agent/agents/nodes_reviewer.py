@@ -26,6 +26,38 @@ logger = logging.getLogger(__name__)
 MAX_RETRIES_DEFAULT = 1
 
 
+def _calibrate_confidence(
+    confidence: str,
+    sq: dict,
+    plan: list,
+) -> tuple[str, str]:
+    """
+    Deterministically override the analysis LLM's self-reported confidence
+    when source_quality metrics don't support it.
+    Returns (calibrated_confidence, reason_string).
+    Only downgrades — never upgrades.
+    """
+    total_chunks = sq.get("total_chunks", 0)
+    answered     = sq.get("sub_questions_answered", 0)
+    n_questions  = len(plan)
+
+    if confidence == "High":
+        if total_chunks < 5:
+            return "Medium", f"High→Medium: only {total_chunks} chunks retrieved (need ≥5)"
+        if n_questions > 0 and answered < n_questions:
+            return "Medium", f"High→Medium: only {answered}/{n_questions} sub-questions answered"
+
+    if confidence in ("High", "Medium"):
+        if total_chunks <= 2:
+            return "Low", f"→Low: only {total_chunks} chunks retrieved"
+        if n_questions > 0 and answered == 0:
+            return "Low", "→Low: no sub-questions answered"
+        if n_questions >= 3 and answered < (n_questions // 2):
+            return "Low", f"→Low: only {answered}/{n_questions} sub-questions answered (<50%)"
+
+    return confidence, ""
+
+
 class ReviewerOutput(BaseModel):
     verdict: Literal["PASS", "RETRY_THIN", "RETRY_CONTRADICTION"]
     reason: str
@@ -88,6 +120,7 @@ def reviewer_node(state: DynamicAgentState) -> DynamicAgentState:
     retry_count = state.get("retry_count", 0)
     max_retries = state.get("max_retries", settings.max_retries)
     review_log  = list(state.get("review_log") or [])
+    plan        = state.get("user_approved_plan") or state.get("plan") or []
 
     # ── Deterministic pre-checks (no LLM call needed) ──────────────
     force_retry = False
@@ -128,17 +161,22 @@ def reviewer_node(state: DynamicAgentState) -> DynamicAgentState:
         }
         review_log.append(entry)
 
+        calibrated, cal_reason = _calibrate_confidence(confidence, sq, plan)
+        if cal_reason:
+            logger.info("Confidence calibrated: %s (was %s)", calibrated, confidence)
+
         logger.info(
             "Reviewer | verdict=%s | rewrites=%d",
             output.verdict, len(output.suggested_rewrites),
         )
         return {
             **state,
-            "retry_count": retry_count + 1,
-            "rewritten_queries": output.suggested_rewrites,
+            "confidence":         calibrated,
+            "retry_count":        retry_count + 1,
+            "rewritten_queries":  output.suggested_rewrites,
             "data_contradictions": output.detected_contradictions,
-            "review_log": review_log,
-            "reviewer_verdict": "RETRY",
+            "review_log":         review_log,
+            "reviewer_verdict":   "RETRY",
         }
 
     # ── LLM contradiction check (always runs on PASS path) ─────────
@@ -174,22 +212,28 @@ def reviewer_node(state: DynamicAgentState) -> DynamicAgentState:
         and retry_count < max_retries
     )
 
+    calibrated, cal_reason = _calibrate_confidence(confidence, sq, plan)
+    if cal_reason:
+        logger.info("Confidence calibrated: %s (was %s) — %s", calibrated, confidence, cal_reason)
+
     if should_retry:
         logger.info("Reviewer RETRY (contradiction+Low confidence) | cycle=%d", retry_count + 1)
         entry["suggested_rewrites"] = output.suggested_rewrites
         return {
             **state,
-            "retry_count": retry_count + 1,
-            "rewritten_queries": output.suggested_rewrites,
+            "confidence":          calibrated,
+            "retry_count":         retry_count + 1,
+            "rewritten_queries":   output.suggested_rewrites,
             "data_contradictions": output.detected_contradictions,
-            "review_log": review_log,
-            "reviewer_verdict": "RETRY",
+            "review_log":          review_log,
+            "reviewer_verdict":    "RETRY",
         }
 
-    logger.info("Reviewer PASS | cycle=%d | contradictions=%d", retry_count, len(output.detected_contradictions))
+    logger.info("Reviewer PASS | cycle=%d | confidence=%s | contradictions=%d", retry_count, calibrated, len(output.detected_contradictions))
     return {
         **state,
+        "confidence":          calibrated,
         "data_contradictions": output.detected_contradictions,
-        "review_log": review_log,
-        "reviewer_verdict": "PASS",
+        "review_log":          review_log,
+        "reviewer_verdict":    "PASS",
     }
