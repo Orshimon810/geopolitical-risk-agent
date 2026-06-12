@@ -135,6 +135,7 @@ def analysis_node(state: AgentState) -> AgentState:
     plan = state.get("plan", [])
     retrieved_chunks = state.get("retrieved_chunks", [])
     signals = state.get("signals", {})
+    source_quality = state.get("source_quality") or {}
 
     evidence_block = _format_evidence(retrieved_chunks, max_items=12)
 
@@ -165,6 +166,15 @@ def analysis_node(state: AgentState) -> AgentState:
         if market_lines:
             signals_block += "\n\nLive Market Prices:\n" + "\n".join(market_lines)
 
+    n_questions = len(plan)
+    answered = source_quality.get("sub_questions_answered", 0)
+    total_chunks = source_quality.get("total_chunks", 0)
+    coverage_line = (
+        f"Evidence coverage: {answered}/{n_questions} sub-questions answered, "
+        f"{total_chunks} total chunks retrieved"
+        if n_questions > 0 else ""
+    )
+
     prompt = f"""
 You are a senior geopolitical risk analyst advising institutional investors.
 
@@ -178,6 +188,8 @@ Planner sub-questions:
 
 Evidence:
 {evidence_block}
+
+{coverage_line}
 
 {signals_block}
 
