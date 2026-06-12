@@ -1,18 +1,23 @@
 """
-Agent router — /agent/analyze, /agent/history, and /agent/tasks/{task_id}.
+Agent router — analysis dispatch, task polling, HITL approval, and history.
 
 POST /agent/analyze
-  • Protected by JWT auth + per-user rate limiter.
-  • Dispatches a Celery background task and immediately returns 202 Accepted
-    with the task_id so the client can poll for results.
-
-GET /agent/history
-  • Protected by JWT auth.
-  • Returns paginated analysis history from the DB for the authenticated user.
+  Dispatches Task A (run_to_breakpoint) which runs the planner, then pauses.
+  Returns 202 Accepted with task_id. Client polls /tasks/{task_id}.
 
 GET /agent/tasks/{task_id}
-  • Protected by JWT auth.
-  • Reads the real-time task state from Redis (PENDING → PROCESSING → SUCCESS/FAILED).
+  Returns current task state from Redis (PENDING → PROCESSING →
+  WAITING_FOR_INPUT → PROCESSING → SUCCESS/FAILED).
+  When status == WAITING_FOR_INPUT and the task is older than
+  HITL_TIMEOUT_MINUTES, auto-approves with the original plan and
+  dispatches Task B so stale sessions don't get stuck forever.
+
+POST /agent/tasks/{task_id}/approve-plan
+  Injects user-edited sub-questions into the suspended graph checkpoint
+  and dispatches Task B (resume_geopolitical_agent_task).
+
+GET  /agent/history       — paginated analysis history
+DELETE /agent/history/{id} — delete a single history entry
 """
 
 import json
@@ -27,8 +32,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from api.core.query_cache import get_cached_result
 from api.core.redis_client import get_redis
 from api.dependencies import check_rate_limit, db_session, get_current_user
-from api.schemas.agent import AnalyzeRequest, HistoryItemResponse, TaskCreatedResponse, TaskStatusResponse
-from api.worker.tasks import run_geopolitical_agent_task
+from api.schemas.agent import (
+    AnalyzeRequest,
+    ApprovePlanRequest,
+    HistoryItemResponse,
+    TaskCreatedResponse,
+    TaskStatusResponse,
+)
+from api.worker.tasks import resume_geopolitical_agent_task, run_geopolitical_agent_task
+from georisk_agent.app.config import settings
 from georisk_agent.db.dal import delete_analysis_by_id, get_user_history
 from georisk_agent.db.models import User
 
@@ -37,6 +49,19 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/agent", tags=["Agent"])
 
 _TASK_TTL_SECONDS = 86_400  # 24 hours
+
+
+def _minutes_since(iso_timestamp: str) -> float:
+    """Return elapsed minutes since the given ISO-8601 UTC timestamp."""
+    try:
+        then = datetime.fromisoformat(iso_timestamp)
+        now  = datetime.now(timezone.utc)
+        # Handle naive timestamps written before timezone-awareness was added
+        if then.tzinfo is None:
+            then = then.replace(tzinfo=timezone.utc)
+        return (now - then).total_seconds() / 60
+    except Exception:
+        return 0.0
 
 
 @router.post(
@@ -50,14 +75,7 @@ async def analyze(
     current_user: User = Depends(check_rate_limit),
     redis_client: aioredis.Redis = Depends(get_redis),
 ) -> TaskCreatedResponse:
-    """
-    Workflow:
-    1. Check the query result cache — if hit, write a synthetic SUCCESS state and
-       return immediately (no Celery task dispatched).
-    2. On cache miss: generate a task_id, write PENDING to Redis, dispatch Celery.
-    3. Return 202 Accepted with the task_id (client polls /tasks/{task_id} as normal).
-    """
-    now = datetime.now(timezone.utc).isoformat()
+    now     = datetime.now(timezone.utc).isoformat()
     task_id = str(uuid.uuid4())
 
     cached = await get_cached_result(redis_client, body.query)
@@ -81,6 +99,8 @@ async def analyze(
         "created_at": now,
         "completed_at": None,
         "cached": False,
+        "user_id": str(current_user.id),
+        "query": body.query,
     }
     await redis_client.setex(f"task:{task_id}", _TASK_TTL_SECONDS, json.dumps(initial_state))
 
@@ -88,8 +108,138 @@ async def analyze(
         args=[body.query, str(current_user.id)],
         task_id=task_id,
     )
-
     return TaskCreatedResponse(task_id=task_id)
+
+
+@router.get(
+    "/tasks/{task_id}",
+    response_model=TaskStatusResponse,
+    summary="Poll the status of an analysis task",
+)
+async def get_task_status(
+    task_id: str,
+    current_user: User = Depends(get_current_user),
+    redis_client: aioredis.Redis = Depends(get_redis),
+) -> TaskStatusResponse:
+    """
+    Returns the current state from Redis.
+    When the task is WAITING_FOR_INPUT and the HITL timeout has elapsed,
+    the original sub-questions are auto-approved and Task B is dispatched.
+    """
+    raw = await redis_client.get(f"task:{task_id}")
+    if raw is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Task not found or has expired (TTL is 24 hours).",
+        )
+
+    data = json.loads(raw)
+
+    # ── HITL auto-approval after timeout ──────────────────────────
+    if data.get("status") == "WAITING_FOR_INPUT":
+        waiting_since = data.get("waiting_since", "")
+        if waiting_since and _minutes_since(waiting_since) >= settings.hitl_timeout_minutes:
+            logger.info(
+                "Task %s HITL timeout — auto-approving original plan", task_id
+            )
+            await _auto_approve(task_id, data, redis_client)
+            # Return PROCESSING so the frontend immediately transitions
+            data["status"] = "PROCESSING"
+
+    return TaskStatusResponse(task_id=task_id, **{
+        k: v for k, v in data.items()
+        if k in TaskStatusResponse.model_fields
+    })
+
+
+async def _auto_approve(
+    task_id: str,
+    task_state: dict,
+    redis_client: aioredis.Redis,
+) -> None:
+    """
+    Inject the original sub-questions into the suspended checkpoint and
+    dispatch Task B. Called when the HITL timeout fires.
+    """
+    sub_questions = task_state.get("sub_questions", [])
+    user_id       = task_state.get("user_id", "")
+
+    try:
+        from georisk_agent.agents.graph import build_graph, get_redis_saver
+
+        config = {"configurable": {"thread_id": task_id}}
+        with get_redis_saver() as saver:
+            graph = build_graph(checkpointer=saver)
+            graph.update_state(
+                config,
+                {"user_approved_plan": sub_questions, "hitl_status": "BYPASSED"},
+                as_node="planner",
+            )
+    except Exception as exc:
+        logger.warning("Auto-approve graph.update_state failed: %s", exc)
+
+    resume_geopolitical_agent_task.apply_async(args=[task_id, user_id])
+
+    updated = {**task_state, "status": "PROCESSING"}
+    await redis_client.setex(f"task:{task_id}", _TASK_TTL_SECONDS, json.dumps(updated))
+
+
+@router.post(
+    "/tasks/{task_id}/approve-plan",
+    response_model=TaskStatusResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Approve or edit the planner sub-questions and resume analysis",
+)
+async def approve_plan(
+    task_id: str,
+    body: ApprovePlanRequest,
+    current_user: User = Depends(get_current_user),
+    redis_client: aioredis.Redis = Depends(get_redis),
+) -> TaskStatusResponse:
+    raw = await redis_client.get(f"task:{task_id}")
+    if not raw:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Task not found")
+
+    task_state = json.loads(raw)
+
+    if task_state.get("status") != "WAITING_FOR_INPUT":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Task is not waiting for input (status={task_state.get('status')})",
+        )
+
+    if task_state.get("user_id") != str(current_user.id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not your task")
+
+    # Inject user edits into the suspended graph checkpoint
+    try:
+        from georisk_agent.agents.graph import build_graph, get_redis_saver
+
+        config = {"configurable": {"thread_id": task_id}}
+        with get_redis_saver() as saver:
+            graph = build_graph(checkpointer=saver)
+            graph.update_state(
+                config,
+                {"user_approved_plan": body.sub_questions, "hitl_status": "APPROVED"},
+                as_node="planner",
+            )
+    except Exception as exc:
+        logger.error("approve_plan: graph.update_state failed: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update plan in graph checkpoint",
+        )
+
+    resume_geopolitical_agent_task.apply_async(args=[task_id, str(current_user.id)])
+
+    updated = {**task_state, "status": "PROCESSING"}
+    await redis_client.setex(f"task:{task_id}", _TASK_TTL_SECONDS, json.dumps(updated))
+
+    logger.info(
+        "Task %s approved by user=%s | sub_questions=%d",
+        task_id, current_user.id, len(body.sub_questions),
+    )
+    return TaskStatusResponse(task_id=task_id, status="PROCESSING")
 
 
 @router.get(
@@ -105,32 +255,6 @@ async def get_history(
 ) -> list[HistoryItemResponse]:
     records = await get_user_history(session, current_user.id, limit=limit, offset=offset)
     return [HistoryItemResponse.model_validate(r) for r in records]
-
-
-@router.get(
-    "/tasks/{task_id}",
-    response_model=TaskStatusResponse,
-    summary="Poll the status of an analysis task",
-)
-async def get_task_status(
-    task_id: str,
-    current_user: User = Depends(get_current_user),
-    redis_client: aioredis.Redis = Depends(get_redis),
-) -> TaskStatusResponse:
-    """
-    Returns the current state of the task from Redis.
-    States: PENDING → PROCESSING → SUCCESS | FAILED
-    The result field is populated only when status is SUCCESS.
-    """
-    raw = await redis_client.get(f"task:{task_id}")
-    if raw is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Task not found or has expired (TTL is 24 hours).",
-        )
-
-    data = json.loads(raw)
-    return TaskStatusResponse(task_id=task_id, **data)
 
 
 @router.delete(

@@ -33,6 +33,7 @@ dependencies = [
   # --- Task queue / caching ---
   "redis>=5.0.0",                # redis.asyncio + sync client for Celery
   "celery>=5.3.0",
+  "langgraph-checkpoint-redis>=0.1.0",  # persistent checkpointer for HITL
 
   # --- Config / utilities ---
   "python-dotenv>=1.0.1",

@@ -20,11 +20,13 @@ const EXAMPLE_QUERIES = [
 
 
 export default function AnalysisPage() {
-  const [query, setQuery] = useState("");
-  const [uiState, setUiState] = useState<UIState>("idle");
+  const [query, setQuery]           = useState("");
+  const [uiState, setUiState]       = useState<UIState>("idle");
   const [taskStatus, setTaskStatus] = useState<TaskStatus>("PENDING");
-  const [result, setResult] = useState<AnalysisResult | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [result, setResult]         = useState<AnalysisResult | null>(null);
+  const [error, setError]           = useState<string | null>(null);
+  const [subQuestions, setSubQuestions] = useState<string[]>([]);
+  const [taskId, setTaskId]         = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const stopPolling = () => {
@@ -34,6 +36,36 @@ export default function AnalysisPage() {
     }
   };
 
+  const startPolling = useCallback((id: string) => {
+    pollRef.current = setInterval(async () => {
+      try {
+        const data = await api.getTaskStatus(id);
+        setTaskStatus(data.status as TaskStatus);
+
+        if (data.status === "WAITING_FOR_INPUT") {
+          // Don't stop polling — just surface the sub-questions for review.
+          // The interval keeps running so the timeout auto-approve in the
+          // backend still works when the user eventually polls.
+          if (data.sub_questions && data.sub_questions.length > 0) {
+            setSubQuestions(data.sub_questions);
+          }
+        } else if (data.status === "SUCCESS") {
+          stopPolling();
+          setResult(data.result);
+          setUiState("done");
+        } else if (data.status === "FAILED") {
+          stopPolling();
+          setError(data.error ?? "Analysis failed");
+          setUiState("error");
+        }
+      } catch {
+        stopPolling();
+        setError("Lost connection to server");
+        setUiState("error");
+      }
+    }, 2000);
+  }, []);
+
   const handleSubmit = useCallback(async () => {
     if (!query.trim() || uiState === "running") return;
 
@@ -41,35 +73,29 @@ export default function AnalysisPage() {
     setTaskStatus("PENDING");
     setResult(null);
     setError(null);
+    setSubQuestions([]);
 
     try {
       const { task_id } = await api.analyzeQuery(query.trim());
-
-      pollRef.current = setInterval(async () => {
-        try {
-          const data = await api.getTaskStatus(task_id);
-          setTaskStatus(data.status as TaskStatus);
-
-          if (data.status === "SUCCESS") {
-            stopPolling();
-            setResult(data.result);
-            setUiState("done");
-          } else if (data.status === "FAILED") {
-            stopPolling();
-            setError(data.error ?? "Analysis failed");
-            setUiState("error");
-          }
-        } catch {
-          stopPolling();
-          setError("Lost connection to server");
-          setUiState("error");
-        }
-      }, 2000);
+      setTaskId(task_id);
+      startPolling(task_id);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to start analysis");
       setUiState("error");
     }
-  }, [query, uiState]);
+  }, [query, uiState, startPolling]);
+
+  const handleApprove = useCallback(async (questions: string[]) => {
+    if (!taskId) return;
+    try {
+      await api.approvePlan(taskId, questions);
+      // Status will transition to PROCESSING on the next poll — no need to update locally
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Failed to approve plan");
+      setUiState("error");
+      stopPolling();
+    }
+  }, [taskId]);
 
   const handleReset = () => {
     stopPolling();
@@ -78,6 +104,8 @@ export default function AnalysisPage() {
     setResult(null);
     setError(null);
     setTaskStatus("PENDING");
+    setSubQuestions([]);
+    setTaskId(null);
   };
 
   const running = uiState === "running";
@@ -152,9 +180,14 @@ export default function AnalysisPage() {
         </div>
       </div>
 
-      {/* Agent stepper */}
+      {/* Agent stepper — shown while running or after error */}
       {(running || uiState === "error") && (
-        <AgentStepper status={taskStatus} error={error} />
+        <AgentStepper
+          status={taskStatus}
+          error={error}
+          subQuestions={subQuestions}
+          onApprove={handleApprove}
+        />
       )}
 
       {/* Results */}
@@ -162,7 +195,7 @@ export default function AnalysisPage() {
         <ResultsDisplay result={result} query={query} />
       )}
 
-      {/* Rate limit / generic error (idle state) */}
+      {/* Rate limit / generic error shown below stepper in error state */}
       {uiState === "error" && error && (
         <div className="rounded-xl border border-rose-800 bg-rose-950/30 p-4">
           <p className="text-sm text-rose-400">

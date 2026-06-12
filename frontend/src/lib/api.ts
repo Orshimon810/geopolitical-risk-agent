@@ -81,6 +81,13 @@ export const api = {
     return apiFetch<TaskStatusResponse>(`/agent/tasks/${taskId}`);
   },
 
+  approvePlan(taskId: string, subQuestions: string[]) {
+    return apiFetch<{ task_id: string; status: string }>(
+      `/agent/tasks/${taskId}/approve-plan`,
+      { method: "POST", body: JSON.stringify({ sub_questions: subQuestions }) },
+    );
+  },
+
   getHistory(limit = 20, offset = 0): Promise<import("./types").HistoryItem[]> {
     return apiFetch<import("./types").HistoryItem[]>(
       `/agent/history?limit=${limit}&offset=${offset}`
