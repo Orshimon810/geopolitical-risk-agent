@@ -158,8 +158,15 @@ def _format_portfolio_block(
     holdings: list[PortfolioHolding],
     portfolio_prices: dict[str, Any],
 ) -> str:
-    lines = ["Portfolio positions to assess:"]
-    for h in holdings:
+    lines = [
+        "=== PORTFOLIO ANALYSIS REQUIRED ===",
+        f"Analyze ONLY the {len(holdings)} holdings listed below.",
+        "Do NOT substitute, add, or remove any tickers.",
+        "",
+    ]
+
+    ticker_constraints = []
+    for i, h in enumerate(holdings, 1):
         ticker = h.get("ticker", "")
         name = h.get("name", "")
         asset_type = h.get("asset_type", "")
@@ -177,18 +184,24 @@ def _format_portfolio_block(
             meta_parts.append(f"qty: {qty}")
         if val is not None:
             meta_parts.append(f"value: ${val:,.2f}")
-        meta_str = f" — {', '.join(meta_parts)}" if meta_parts else ""
+        meta_str = f" | {', '.join(meta_parts)}" if meta_parts else ""
 
-        lines.append(f"  • {ticker} ({name}, {asset_type}){meta_str} | {price_str}")
+        lines.append(f"{i}. Ticker: {ticker} | Name: {name} | Type: {asset_type}{meta_str} | Price: {price_str}")
+        ticker_constraints.append(f"  - Entry {i}: ticker MUST be \"{ticker}\", name MUST be \"{name}\"")
 
-    lines.append(
-        "\nFor EACH holding above, provide a PortfolioHoldingImpact entry covering:\n"
-        "  - verdict: Bullish / Bearish / Neutral\n"
-        "  - short_term_impact: effect over days/weeks\n"
-        "  - long_term_impact: effect over months/quarters\n"
-        "  - confidence: Low / Medium / High\n"
-        "  - reasoning: specific causal chain linking this geopolitical event to this asset"
-    )
+    lines += [
+        "",
+        f"For portfolio_impacts, provide EXACTLY {len(holdings)} entries in this order:",
+        *ticker_constraints,
+        "",
+        "For each entry also provide:",
+        "  - verdict: Bullish / Bearish / Neutral",
+        "  - short_term_impact: effect over days/weeks (specific to THIS holding)",
+        "  - long_term_impact: effect over months/quarters (specific to THIS holding)",
+        "  - confidence: Low / Medium / High",
+        "  - reasoning: causal chain linking the geopolitical event to THIS specific holding",
+        "=== END PORTFOLIO SECTION ===",
+    ]
     return "\n".join(lines)
 
 
@@ -250,10 +263,12 @@ def analysis_node(state: AgentState) -> AgentState:
     portfolio_block = ""
     if portfolio:
         portfolio_prices = signals.get("portfolio_prices", {})
+        ticker_list = ", ".join(h.get("ticker", "") for h in portfolio)
         portfolio_block = (
             "\n\n" + _format_portfolio_block(portfolio, portfolio_prices) +
-            f"\n\nCRITICAL: You MUST populate the portfolio_impacts field with exactly "
-            f"{len(portfolio)} entries — one per holding listed above. Do not leave it null."
+            f"\n\nCRITICAL: populate portfolio_impacts with EXACTLY {len(portfolio)} entries "
+            f"using ONLY these tickers in this order: {ticker_list}. "
+            f"Do NOT use any other ticker symbols."
         )
 
     prompt = f"""
@@ -313,6 +328,39 @@ Source citation discipline:
             "analysis_node: portfolio provided (%d holdings) but LLM returned null portfolio_impacts",
             len(portfolio),
         )
+    elif portfolio and output.portfolio_impacts:
+        expected = [h.get("ticker", "").upper() for h in portfolio]
+        actual   = [p.ticker.upper() for p in output.portfolio_impacts]
+        if actual != expected:
+            logger.warning(
+                "analysis_node: portfolio_impacts ticker mismatch — expected %s, got %s; correcting by position",
+                expected, actual,
+            )
+            corrected: list[PortfolioHoldingImpact] = []
+            for i, impact in enumerate(output.portfolio_impacts[: len(portfolio)]):
+                h = portfolio[i]
+                corrected.append(PortfolioHoldingImpact(
+                    ticker=h.get("ticker", impact.ticker),
+                    name=h.get("name", impact.name),
+                    verdict=impact.verdict,
+                    short_term_impact=impact.short_term_impact,
+                    long_term_impact=impact.long_term_impact,
+                    confidence=impact.confidence,
+                    reasoning=impact.reasoning,
+                ))
+            # Fill any missing entries for holdings beyond what the LLM generated
+            for i in range(len(corrected), len(portfolio)):
+                h = portfolio[i]
+                corrected.append(PortfolioHoldingImpact(
+                    ticker=h.get("ticker", ""),
+                    name=h.get("name", ""),
+                    verdict="Neutral",
+                    short_term_impact="Insufficient LLM output to assess short-term impact.",
+                    long_term_impact="Insufficient LLM output to assess long-term impact.",
+                    confidence="Low",
+                    reasoning="Entry was missing from LLM response; placeholder inserted.",
+                ))
+            output.portfolio_impacts = corrected
 
     market_impacts = output.market_impacts
     risks = output.risks
