@@ -1,3 +1,4 @@
+import logging
 from typing import List, Dict, Any, Literal, Optional
 
 from langchain_openai import ChatOpenAI
@@ -5,6 +6,8 @@ from pydantic import BaseModel, Field
 
 from georisk_agent.app.config import settings
 from georisk_agent.app.types import AgentState, PortfolioHolding
+
+logger = logging.getLogger(__name__)
 
 
 # -------------------------
@@ -70,8 +73,10 @@ class AnalysisOutput(BaseModel):
     portfolio_impacts: Optional[list[PortfolioHoldingImpact]] = Field(
         default=None,
         description=(
-            "Per-holding impact assessment. Populate ONLY when the user's portfolio is provided below. "
-            "Leave null if no portfolio section appears in the prompt."
+            "Per-holding impact assessment. "
+            "If a 'Portfolio positions to assess' block appears in the prompt you MUST populate this list "
+            "with one entry per holding — never leave it null in that case. "
+            "Leave null only when no portfolio block is present."
         )
     )
 
@@ -245,7 +250,11 @@ def analysis_node(state: AgentState) -> AgentState:
     portfolio_block = ""
     if portfolio:
         portfolio_prices = signals.get("portfolio_prices", {})
-        portfolio_block = "\n\n" + _format_portfolio_block(portfolio, portfolio_prices)
+        portfolio_block = (
+            "\n\n" + _format_portfolio_block(portfolio, portfolio_prices) +
+            f"\n\nCRITICAL: You MUST populate the portfolio_impacts field with exactly "
+            f"{len(portfolio)} entries — one per holding listed above. Do not leave it null."
+        )
 
     prompt = f"""
 You are a senior geopolitical risk analyst advising institutional investors.
@@ -298,6 +307,12 @@ Source citation discipline:
 """
 
     output: AnalysisOutput = structured_llm.invoke(prompt)
+
+    if portfolio and not output.portfolio_impacts:
+        logger.warning(
+            "analysis_node: portfolio provided (%d holdings) but LLM returned null portfolio_impacts",
+            len(portfolio),
+        )
 
     market_impacts = output.market_impacts
     risks = output.risks
