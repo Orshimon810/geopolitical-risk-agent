@@ -5,9 +5,9 @@ import yfinance as yf
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, Any
 
-logger = logging.getLogger(__name__)
-
 from georisk_agent.app.types import AgentState
+
+logger = logging.getLogger(__name__)
 
 COUNTRY_NAME_TO_ISO = {
     # Major economies
