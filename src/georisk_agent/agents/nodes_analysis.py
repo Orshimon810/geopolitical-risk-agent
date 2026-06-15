@@ -1,5 +1,5 @@
 import logging
-from typing import List, Dict, Any, Literal
+from typing import List, Dict, Any, Literal, Optional
 
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
@@ -31,9 +31,9 @@ class PortfolioHoldingImpact(BaseModel):
 
 
 class PortfolioAnalysisOutput(BaseModel):
-    """Dedicated schema for the portfolio-only LLM call."""
+    """Dedicated schema for the focused portfolio-only LLM call."""
     impacts: list[PortfolioHoldingImpact] = Field(
-        description="One entry per holding listed in the prompt, in the same order."
+        description="One impact entry per holding listed in the prompt, in the same order. Never return an empty list if holdings were provided."
     )
 
 
@@ -77,6 +77,17 @@ class AnalysisOutput(BaseModel):
             "Never use generic placeholders like 'Market analysis reports' or 'Bloomberg; Datastream'."
         )
     )
+    # Fallback portfolio assessment embedded in the main call.
+    # The dedicated _portfolio_llm call is the primary source; this is the safety net.
+    portfolio_impacts: Optional[list[PortfolioHoldingImpact]] = Field(
+        default=None,
+        description=(
+            "Per-holding impact assessment. "
+            "If a 'Portfolio positions to assess' block appears in the prompt, "
+            "you MUST populate this list with one entry per listed holding — never leave it null. "
+            "Leave null only when no such block is present."
+        )
+    )
 
 
 # -------------------------
@@ -89,8 +100,8 @@ _llm = ChatOpenAI(
     temperature=0.2,
 )
 
-structured_llm         = _llm.with_structured_output(AnalysisOutput)
-_portfolio_llm         = _llm.with_structured_output(PortfolioAnalysisOutput)
+structured_llm = _llm.with_structured_output(AnalysisOutput)
+_portfolio_llm = _llm.with_structured_output(PortfolioAnalysisOutput)
 
 
 # -------------------------
@@ -149,6 +160,45 @@ def _format_evidence(
     return "\n".join(lines)
 
 
+def _format_portfolio_block(
+    holdings: list[PortfolioHolding],
+    portfolio_prices: dict[str, Any],
+) -> str:
+    """Produce the portfolio block for the main analysis prompt."""
+    lines = ["Portfolio positions to assess:"]
+    for h in holdings:
+        ticker = h.get("ticker", "")
+        name = h.get("name", "")
+        asset_type = h.get("asset_type", "")
+        qty = h.get("quantity")
+        val = h.get("value_usd")
+
+        price_info = portfolio_prices.get(ticker, {})
+        if price_info.get("status") == "ok":
+            price_str = f"${price_info['price']:.2f} ({price_info['change_1d_pct']:+.1f}% today)"
+        else:
+            price_str = "price unavailable"
+
+        meta_parts = []
+        if qty is not None:
+            meta_parts.append(f"qty: {qty}")
+        if val is not None:
+            meta_parts.append(f"value: ${val:,.2f}")
+        meta_str = f" — {', '.join(meta_parts)}" if meta_parts else ""
+
+        lines.append(f"  • {ticker} ({name}, {asset_type}){meta_str} | {price_str}")
+
+    lines.append(
+        "\nFor EACH holding above, provide a PortfolioHoldingImpact entry covering:\n"
+        "  - verdict: Bullish / Bearish / Neutral\n"
+        "  - short_term_impact: effect over days/weeks\n"
+        "  - long_term_impact: effect over months/quarters\n"
+        "  - confidence: Low / Medium / High\n"
+        "  - reasoning: specific causal chain linking this geopolitical event to this asset"
+    )
+    return "\n".join(lines)
+
+
 def _price_str(ticker: str, portfolio_prices: dict[str, Any]) -> str:
     info = portfolio_prices.get(ticker, {})
     if info.get("status") == "ok":
@@ -156,66 +206,24 @@ def _price_str(ticker: str, portfolio_prices: dict[str, Any]) -> str:
     return "price unavailable"
 
 
-# -------------------------
-# Dedicated portfolio call
-# -------------------------
-
-def _run_portfolio_analysis(
+def _correct_tickers(
+    raw_impacts: list[PortfolioHoldingImpact],
     portfolio: list[PortfolioHolding],
-    portfolio_prices: dict[str, Any],
-    query: str,
-    market_impacts: list[str],
-    signals_block: str,
 ) -> list[PortfolioHoldingImpact]:
     """
-    Separate, focused LLM call that produces per-holding impact assessments.
-    Isolated from the main analysis call so the model has exactly one task.
+    Enforce correct ticker/name from the input portfolio by position.
+    Fills placeholder entries for any holdings the LLM omitted.
     """
-    holdings_lines = "\n".join(
-        f'{i + 1}. ticker="{h.get("ticker", "")}" | name="{h.get("name", "")}" '
-        f'| type={h.get("asset_type", "stock")} | {_price_str(h.get("ticker", ""), portfolio_prices)}'
-        for i, h in enumerate(portfolio)
-    )
-
-    impacts_lines = "\n".join(f"- {m}" for m in market_impacts[:4])
-    signals_section = ("Market signals:\n" + signals_block) if signals_block else ""
-
-    prompt = f"""You are a geopolitical risk analyst assessing the impact of a specific situation on a user's personal investment holdings.
-
-Geopolitical context:
-{query}
-
-Key market impacts already identified by the main analysis:
-{impacts_lines}
-
-{signals_section}
-
-Assess EXACTLY these {len(portfolio)} investment holdings in the order listed:
-{holdings_lines}
-
-Rules:
-- Return exactly {len(portfolio)} entries in the `impacts` list.
-- Use the EXACT ticker and name values shown above — do not rename, substitute, or add holdings.
-- For each entry: verdict (Bullish/Bearish/Neutral), short_term_impact, long_term_impact, confidence (Low/Medium/High), reasoning specific to that holding.
-"""
-
-    try:
-        output: PortfolioAnalysisOutput = _portfolio_llm.invoke(prompt)
-        impacts = output.impacts
-    except Exception as exc:
-        logger.error("portfolio analysis LLM call failed: %s", exc, exc_info=True)
-        impacts = []
-
     result: list[PortfolioHoldingImpact] = []
     for i, h in enumerate(portfolio):
         correct_ticker = h.get("ticker", "")
-        correct_name   = h.get("name", correct_ticker)
+        correct_name = h.get("name", correct_ticker)
 
-        if i < len(impacts):
-            raw = impacts[i]
+        if i < len(raw_impacts):
+            raw = raw_impacts[i]
             if raw.ticker.upper() != correct_ticker.upper():
                 logger.warning(
-                    "portfolio analysis: ticker mismatch at position %d — expected %s, got %s; correcting",
+                    "portfolio ticker mismatch at position %d — expected %s, got %s; correcting",
                     i, correct_ticker, raw.ticker,
                 )
             result.append(PortfolioHoldingImpact(
@@ -232,13 +240,59 @@ Rules:
                 ticker=correct_ticker,
                 name=correct_name,
                 verdict="Neutral",
-                short_term_impact="Unable to assess impact for this holding.",
-                long_term_impact="Unable to assess impact for this holding.",
+                short_term_impact="Unable to assess short-term impact for this holding.",
+                long_term_impact="Unable to assess long-term impact for this holding.",
                 confidence="Low",
-                reasoning="Entry was missing from portfolio analysis response.",
+                reasoning="Entry was missing from analysis response.",
             ))
-
     return result
+
+
+# -------------------------
+# Dedicated portfolio call
+# -------------------------
+
+def _run_portfolio_analysis(
+    portfolio: list[PortfolioHolding],
+    portfolio_prices: dict[str, Any],
+    query: str,
+    market_impacts: list[str],
+    signals_block: str,
+) -> list[PortfolioHoldingImpact]:
+    """
+    Focused LLM call that produces per-holding impact assessments.
+    Isolated from the main analysis so the model has exactly one task.
+    Returns corrected entries (ticker/name guaranteed to match input portfolio).
+    """
+    holdings_lines = "\n".join(
+        f'{i + 1}. ticker="{h.get("ticker", "")}" | name="{h.get("name", "")}" '
+        f'| type={h.get("asset_type", "stock")} | {_price_str(h.get("ticker", ""), portfolio_prices)}'
+        for i, h in enumerate(portfolio)
+    )
+    impacts_lines = "\n".join(f"- {m}" for m in market_impacts[:4])
+    signals_section = ("Market signals:\n" + signals_block) if signals_block else ""
+
+    prompt = (
+        "You are a geopolitical risk analyst assessing the impact of a specific situation "
+        "on a user's personal investment holdings.\n\n"
+        f"Geopolitical context:\n{query}\n\n"
+        f"Key market impacts already identified:\n{impacts_lines}\n\n"
+        f"{signals_section}\n\n"
+        f"Assess EXACTLY these {len(portfolio)} investment holdings in the order listed:\n"
+        f"{holdings_lines}\n\n"
+        f"Rules:\n"
+        f"- Return exactly {len(portfolio)} entries in the impacts list.\n"
+        "- Use the EXACT ticker and name values shown above — do not substitute or add holdings.\n"
+        "- For each entry: verdict (Bullish/Bearish/Neutral), short_term_impact, "
+        "long_term_impact, confidence (Low/Medium/High), reasoning specific to that holding."
+    )
+
+    try:
+        output: PortfolioAnalysisOutput = _portfolio_llm.invoke(prompt)
+        return _correct_tickers(output.impacts, portfolio)
+    except Exception as exc:
+        logger.error("dedicated portfolio LLM call failed: %s", exc, exc_info=True)
+        return []
 
 
 # -------------------------
@@ -248,7 +302,11 @@ Rules:
 def analysis_node(state: AgentState) -> AgentState:
     """
     Evidence-grounded, scenario-aware market impact analysis.
-    When state["portfolio"] is set, runs a second focused LLM call for per-holding impacts.
+
+    Portfolio impacts are produced in two independent passes:
+      1. Dedicated focused LLM call (_run_portfolio_analysis) — primary, best quality.
+      2. Fallback embedded in the main AnalysisOutput call — fires when pass 1 returns empty.
+    At least one of the two passes will always populate the section when portfolio is set.
     """
 
     query = state.get("query", "")
@@ -256,7 +314,13 @@ def analysis_node(state: AgentState) -> AgentState:
     retrieved_chunks = state.get("retrieved_chunks", [])
     signals = state.get("signals", {})
     source_quality = state.get("source_quality") or {}
-    portfolio: list[PortfolioHolding] | None = state.get("portfolio")
+    portfolio: Optional[list[PortfolioHolding]] = state.get("portfolio")
+
+    logger.info(
+        "analysis_node: portfolio=%s (%d holdings)",
+        "SET" if portfolio else "NONE",
+        len(portfolio) if portfolio else 0,
+    )
 
     evidence_block = _format_evidence(retrieved_chunks, max_items=12)
 
@@ -296,6 +360,17 @@ def analysis_node(state: AgentState) -> AgentState:
         if n_questions > 0 else ""
     )
 
+    # Build portfolio block for the main prompt (fallback path)
+    portfolio_block = ""
+    if portfolio:
+        portfolio_prices = signals.get("portfolio_prices", {})
+        ticker_list = ", ".join(h.get("ticker", "") for h in portfolio)
+        portfolio_block = (
+            "\n\n" + _format_portfolio_block(portfolio, portfolio_prices) +
+            f"\n\nCRITICAL: populate portfolio_impacts with EXACTLY {len(portfolio)} entries "
+            f"using ONLY these tickers in this order: {ticker_list}."
+        )
+
     prompt = f"""
 You are a senior geopolitical risk analyst advising institutional investors.
 
@@ -313,6 +388,7 @@ Evidence:
 {coverage_line}
 
 {signals_block}
+{portfolio_block}
 
 Structural rules:
 - Do NOT introduce risks inside market_impacts.
@@ -355,27 +431,52 @@ Source citation discipline:
     sources           = output.sources
 
     # -------------------------
-    # Dedicated portfolio pass
+    # Portfolio analysis — two independent passes
     # -------------------------
 
-    portfolio_impacts: list[dict] | None = None
+    portfolio_impacts: Optional[list[dict]] = None
+
     if portfolio:
         portfolio_prices = signals.get("portfolio_prices", {})
-        holding_impacts = _run_portfolio_analysis(
+
+        # Pass 1: dedicated focused LLM call (primary — correct tickers + relevant content)
+        dedicated_impacts = _run_portfolio_analysis(
             portfolio=portfolio,
             portfolio_prices=portfolio_prices,
             query=query,
             market_impacts=market_impacts,
             signals_block=signals_block,
         )
-        portfolio_impacts = [p.model_dump() for p in holding_impacts]
-        logger.info(
-            "analysis_node: portfolio analysis complete — %d/%d holdings assessed",
-            len(portfolio_impacts), len(portfolio),
-        )
+
+        if dedicated_impacts:
+            logger.info(
+                "analysis_node: dedicated portfolio call produced %d/%d entries",
+                len(dedicated_impacts), len(portfolio),
+            )
+            portfolio_impacts = [p.model_dump() for p in dedicated_impacts]
+
+        else:
+            # Pass 2: fallback — use portfolio_impacts from the main AnalysisOutput call
+            logger.warning(
+                "analysis_node: dedicated portfolio call returned empty — trying main-call fallback"
+            )
+            if output.portfolio_impacts:
+                corrected = _correct_tickers(output.portfolio_impacts, portfolio)
+                portfolio_impacts = [p.model_dump() for p in corrected]
+                logger.info(
+                    "analysis_node: fallback produced %d/%d entries",
+                    len(portfolio_impacts), len(portfolio),
+                )
+            else:
+                # Pass 3: both LLM passes returned nothing — generate placeholder entries
+                logger.warning(
+                    "analysis_node: both portfolio passes returned empty — using placeholders"
+                )
+                placeholders = _correct_tickers([], portfolio)
+                portfolio_impacts = [p.model_dump() for p in placeholders]
 
     # -------------------------
-    # Defensive fallbacks
+    # Defensive fallbacks for main analysis fields
     # -------------------------
 
     if not market_impacts:
@@ -414,7 +515,7 @@ Source citation discipline:
         "portfolio_impacts": portfolio_impacts,
         "debug": {
             **(state.get("debug") or {}),
-            "analysis_reasoning":          output.reasoning,
-            "analysis_structured_output":  output.model_dump(),
+            "analysis_reasoning":         output.reasoning,
+            "analysis_structured_output": output.model_dump(),
         },
     }
