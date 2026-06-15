@@ -25,9 +25,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     }
   }, [isAuthenticated, isLoading, router]);
 
-  // Close mobile sidebar on route change
+  // Close mobile sidebar on route change (setTimeout avoids synchronous setState in effect)
   useEffect(() => {
-    setMobileOpen(false);
+    const t = setTimeout(() => setMobileOpen(false), 0);
+    return () => clearTimeout(t);
   }, [pathname]);
 
   if (isLoading) {
