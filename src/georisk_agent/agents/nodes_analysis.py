@@ -177,15 +177,18 @@ def _run_portfolio_analysis(
         for i, h in enumerate(portfolio)
     )
 
+    impacts_lines = "\n".join(f"- {m}" for m in market_impacts[:4])
+    signals_section = ("Market signals:\n" + signals_block) if signals_block else ""
+
     prompt = f"""You are a geopolitical risk analyst assessing the impact of a specific situation on a user's personal investment holdings.
 
 Geopolitical context:
 {query}
 
 Key market impacts already identified by the main analysis:
-{chr(10).join(f"- {m}" for m in market_impacts[:4])}
+{impacts_lines}
 
-{("Market signals:\n" + signals_block) if signals_block else ""}
+{signals_section}
 
 Assess EXACTLY these {len(portfolio)} investment holdings in the order listed:
 {holdings_lines}
