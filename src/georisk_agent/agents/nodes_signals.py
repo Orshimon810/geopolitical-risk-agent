@@ -5,7 +5,7 @@ import yfinance as yf
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, Any
 
-from georisk_agent.app.types import AgentState
+from georisk_agent.app.types import DynamicAgentState
 
 logger = logging.getLogger(__name__)
 
@@ -218,7 +218,7 @@ def fetch_portfolio_prices(holdings: list[Dict[str, Any]]) -> Dict[str, Any]:
     return results
 
 
-def signals_node(state: AgentState) -> AgentState:
+def signals_node(state: DynamicAgentState) -> DynamicAgentState:
     """
     Context-aware External Signals Agent.
 
