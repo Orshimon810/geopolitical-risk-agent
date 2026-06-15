@@ -5,12 +5,16 @@ GET  /portfolio/holdings          → list all holdings for the authenticated us
 POST /portfolio/holdings          → add a holding (max 20 per user)
 PUT  /portfolio/holdings/{id}     → update name / quantity / value_usd
 DELETE /portfolio/holdings/{id}   → remove a holding
+GET  /portfolio/search?q=         → ticker/company autocomplete (via yfinance)
+GET  /portfolio/quote?ticker=     → live price for a ticker (via yfinance)
 """
 
+import asyncio
 import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+import yfinance as yf
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,6 +23,8 @@ from api.schemas.portfolio import (
     PortfolioHoldingCreate,
     PortfolioHoldingResponse,
     PortfolioHoldingUpdate,
+    TickerQuoteResponse,
+    TickerSearchResult,
 )
 from georisk_agent.db.dal import (
     add_holding,
@@ -28,6 +34,18 @@ from georisk_agent.db.dal import (
     update_holding,
 )
 from georisk_agent.db.models import User
+
+_QUOTE_TYPE_TO_ASSET: dict[str, str] = {
+    "EQUITY": "stock",
+    "ETF": "etf",
+    "MUTUALFUND": "etf",
+    "CRYPTOCURRENCY": "crypto",
+    "FUTURE": "commodity",
+    "COMMODITY": "commodity",
+    "BOND": "bond",
+    "FIXED_INCOME": "bond",
+    "INDEX": "etf",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -145,3 +163,52 @@ async def delete_holding_endpoint(
 
     await session.commit()
     logger.info("Deleted holding id=%s user=%s", holding_id, current_user.id)
+
+
+@router.get(
+    "/search",
+    response_model=list[TickerSearchResult],
+    summary="Autocomplete ticker/company search (max 8 results)",
+)
+async def search_tickers(
+    q: str = Query(min_length=1, max_length=50, description="Ticker symbol or company name"),
+    current_user: User = Depends(get_current_user),
+) -> list[TickerSearchResult]:
+    def _search() -> list[TickerSearchResult]:
+        try:
+            results = yf.Search(q, max_results=8, news_count=0)
+            out: list[TickerSearchResult] = []
+            for quote in results.quotes:
+                symbol: str = quote.get("symbol", "")
+                if not symbol:
+                    continue
+                name: str = quote.get("longname") or quote.get("shortname") or symbol
+                qt: str = (quote.get("quoteType") or "").upper()
+                asset_type = _QUOTE_TYPE_TO_ASSET.get(qt, "stock")
+                out.append(TickerSearchResult(ticker=symbol, name=name, asset_type=asset_type))
+            return out
+        except Exception:
+            return []
+
+    return await asyncio.to_thread(_search)
+
+
+@router.get(
+    "/quote",
+    response_model=TickerQuoteResponse,
+    summary="Fetch live price for a single ticker",
+)
+async def get_ticker_quote(
+    ticker: str = Query(min_length=1, max_length=20, description="Yahoo Finance ticker symbol"),
+    current_user: User = Depends(get_current_user),
+) -> TickerQuoteResponse:
+    def _quote() -> TickerQuoteResponse:
+        try:
+            info = yf.Ticker(ticker.upper()).fast_info
+            price = float(info.last_price) if info.last_price is not None else None
+            currency: str = getattr(info, "currency", None) or "USD"
+            return TickerQuoteResponse(ticker=ticker.upper(), price=price, currency=currency)
+        except Exception:
+            return TickerQuoteResponse(ticker=ticker.upper(), price=None, currency="USD")
+
+    return await asyncio.to_thread(_quote)
