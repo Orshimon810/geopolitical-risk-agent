@@ -1,8 +1,11 @@
+import logging
 import re
 import requests
 import yfinance as yf
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, Any
+
+logger = logging.getLogger(__name__)
 
 from georisk_agent.app.types import AgentState
 
@@ -226,6 +229,7 @@ def signals_node(state: AgentState) -> AgentState:
     query = state.get("query", "")
     plan = " ".join(state.get("plan", []))
     portfolio = state.get("portfolio")
+    logger.info("signals_node: portfolio=%s (%d holdings)", "SET" if portfolio else "NONE", len(portfolio) if portfolio else 0)
 
     combined_text = f"{query} {plan}"
     countries = extract_relevant_countries(combined_text)
