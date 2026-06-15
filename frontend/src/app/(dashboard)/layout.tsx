@@ -7,8 +7,9 @@ import { Navbar } from "@/components/Navbar";
 import { useAuth } from "@/context/AuthContext";
 
 const PAGE_TITLES: Record<string, string> = {
-  "/analysis": "New Analysis",
-  "/history": "Analysis History",
+  "/analysis":  "New Analysis",
+  "/portfolio": "My Portfolio",
+  "/history":   "Analysis History",
 };
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
