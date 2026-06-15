@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { Plus, Pencil, Trash2, Loader2, Check, X } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { Plus, Pencil, Trash2, Loader2, Check, X, Zap } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -44,6 +44,12 @@ const emptyAddForm = {
   value_usd: "",
 };
 
+interface TickerSuggestion {
+  ticker: string;
+  name: string;
+  asset_type: AssetType;
+}
+
 interface EditState {
   id: string;
   name: string;
@@ -63,6 +69,16 @@ export default function PortfolioPage() {
   const [editBusy, setEditBusy]     = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
+  // Autocomplete state
+  const [suggestions, setSuggestions]         = useState<TickerSuggestion[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [suggestLoading, setSuggestLoading]   = useState(false);
+  const [livePrice, setLivePrice]             = useState<number | null>(null);
+  const [liveCurrency, setLiveCurrency]       = useState<string>("USD");
+  const [autoValue, setAutoValue]             = useState(false);
+  const [quoteFetching, setQuoteFetching]     = useState(false);
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     let cancelled = false;
     api.getPortfolio()
@@ -71,6 +87,76 @@ export default function PortfolioPage() {
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, []);
+
+  /* ── Autocomplete ── */
+  function resetAddForm() {
+    setAddForm(emptyAddForm);
+    setSuggestions([]);
+    setShowSuggestions(false);
+    setLivePrice(null);
+    setAutoValue(false);
+    setAddError(null);
+  }
+
+  function handleTickerInput(value: string) {
+    setAddForm((f) => ({ ...f, ticker: value }));
+    setLivePrice(null);
+    setAutoValue(false);
+
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    if (!value.trim()) { setSuggestions([]); setShowSuggestions(false); return; }
+
+    searchTimer.current = setTimeout(async () => {
+      setSuggestLoading(true);
+      try {
+        const results = await api.searchTickers(value.trim());
+        setSuggestions(results as TickerSuggestion[]);
+        setShowSuggestions(results.length > 0);
+      } catch {
+        setSuggestions([]);
+      } finally {
+        setSuggestLoading(false);
+      }
+    }, 300);
+  }
+
+  async function handleSelectSuggestion(s: TickerSuggestion) {
+    setAddForm((f) => ({ ...f, ticker: s.ticker, name: s.name, asset_type: s.asset_type }));
+    setShowSuggestions(false);
+    setSuggestions([]);
+    setQuoteFetching(true);
+    try {
+      const quote = await api.getTickerQuote(s.ticker);
+      if (quote.price != null) {
+        setLivePrice(quote.price);
+        setLiveCurrency(quote.currency);
+        setAutoValue(true);
+        // Auto-compute value if quantity is already filled
+        setAddForm((f) => {
+          const qty = parseFloat(f.quantity);
+          if (!isNaN(qty) && qty > 0) {
+            return { ...f, value_usd: (qty * quote.price!).toFixed(2) };
+          }
+          return f;
+        });
+      }
+    } catch {
+      // price unavailable — user fills manually
+    } finally {
+      setQuoteFetching(false);
+    }
+  }
+
+  function handleQuantityChange(value: string) {
+    setAddForm((f) => {
+      const next = { ...f, quantity: value };
+      if (autoValue && livePrice != null) {
+        const qty = parseFloat(value);
+        next.value_usd = !isNaN(qty) && qty > 0 ? (qty * livePrice).toFixed(2) : "";
+      }
+      return next;
+    });
+  }
 
   /* ── Add holding ── */
   async function handleAdd(e: React.FormEvent) {
@@ -87,7 +173,7 @@ export default function PortfolioPage() {
       };
       const newHolding = await api.addHolding(payload);
       setHoldings((prev) => [...prev, newHolding]);
-      setAddForm(emptyAddForm);
+      resetAddForm();
       setShowAddForm(false);
     } catch (e: unknown) {
       setAddError(e instanceof Error ? e.message : "Failed to add holding");
@@ -178,7 +264,7 @@ export default function PortfolioPage() {
           </div>
           <Button
             size="sm"
-            onClick={() => { setShowAddForm((s) => !s); setAddError(null); }}
+            onClick={() => { setShowAddForm((s) => !s); resetAddForm(); }}
             disabled={atLimit}
             className="gap-1.5"
           >
@@ -191,26 +277,59 @@ export default function PortfolioPage() {
         {showAddForm && (
           <form onSubmit={handleAdd} className="mt-4 border-t border-slate-800 pt-4 space-y-4">
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="new-ticker">Ticker *</Label>
-                <Input
-                  id="new-ticker"
-                  placeholder="e.g. AAPL, BTC-USD"
-                  value={addForm.ticker}
-                  onChange={(e) => setAddForm((f) => ({ ...f, ticker: e.target.value.toUpperCase() }))}
-                  required
-                />
+
+              {/* Ticker autocomplete — spans 2 cols so name fits beside it on sm */}
+              <div className="space-y-1.5 sm:col-span-2 relative">
+                <Label htmlFor="new-ticker">Ticker / Company *</Label>
+                <div className="relative">
+                  <Input
+                    id="new-ticker"
+                    placeholder="Search by ticker or company name…"
+                    value={addForm.ticker}
+                    autoComplete="off"
+                    onChange={(e) => handleTickerInput(e.target.value)}
+                    onBlur={() => setTimeout(() => setShowSuggestions(false), 150)}
+                    onFocus={() => { if (suggestions.length > 0) setShowSuggestions(true); }}
+                    required
+                  />
+                  {suggestLoading && (
+                    <Loader2 className="absolute right-2.5 top-2.5 h-4 w-4 animate-spin text-slate-500" />
+                  )}
+                </div>
+
+                {/* Dropdown */}
+                {showSuggestions && suggestions.length > 0 && (
+                  <ul className="absolute z-20 left-0 right-0 top-full mt-1 rounded-md border border-slate-700 bg-slate-900 shadow-xl overflow-hidden">
+                    {suggestions.map((s) => (
+                      <li key={s.ticker}>
+                        <button
+                          type="button"
+                          onMouseDown={() => handleSelectSuggestion(s)}
+                          className="w-full flex items-center gap-3 px-3 py-2 text-left hover:bg-slate-800 transition-colors"
+                        >
+                          <span className="font-mono font-semibold text-slate-100 text-xs w-16 shrink-0">{s.ticker}</span>
+                          <span className="text-slate-300 text-xs truncate flex-1">{s.name}</span>
+                          <span className={`text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 rounded border shrink-0 ${ASSET_COLORS[s.asset_type]}`}>
+                            {ASSET_LABELS[s.asset_type]}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+
+                {/* Live price indicator */}
+                {(quoteFetching || livePrice != null) && (
+                  <p className="text-[11px] text-amber-400/80 flex items-center gap-1 mt-0.5">
+                    {quoteFetching
+                      ? <><Loader2 className="h-3 w-3 animate-spin" /> Fetching live price…</>
+                      : <><Zap className="h-3 w-3" /> {liveCurrency} {livePrice!.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })} / unit</>
+                    }
+                  </p>
+                )}
               </div>
-              <div className="space-y-1.5 sm:col-span-2">
-                <Label htmlFor="new-name">Name *</Label>
-                <Input
-                  id="new-name"
-                  placeholder="e.g. Apple Inc."
-                  value={addForm.name}
-                  onChange={(e) => setAddForm((f) => ({ ...f, name: e.target.value }))}
-                  required
-                />
-              </div>
+
+              {/* Asset Type — auto-filled on selection, user can override */}
               <div className="space-y-1.5">
                 <Label htmlFor="new-type">Asset Type *</Label>
                 <select
@@ -224,8 +343,22 @@ export default function PortfolioPage() {
                   ))}
                 </select>
               </div>
+
+              {/* Name — auto-filled, editable */}
+              <div className="space-y-1.5 sm:col-span-2">
+                <Label htmlFor="new-name">Name *</Label>
+                <Input
+                  id="new-name"
+                  placeholder="e.g. Apple Inc."
+                  value={addForm.name}
+                  onChange={(e) => setAddForm((f) => ({ ...f, name: e.target.value }))}
+                  required
+                />
+              </div>
+
+              {/* Quantity */}
               <div className="space-y-1.5">
-                <Label htmlFor="new-qty">Quantity (optional)</Label>
+                <Label htmlFor="new-qty">Quantity</Label>
                 <Input
                   id="new-qty"
                   type="number"
@@ -233,11 +366,20 @@ export default function PortfolioPage() {
                   step="any"
                   placeholder="No. of units"
                   value={addForm.quantity}
-                  onChange={(e) => setAddForm((f) => ({ ...f, quantity: e.target.value }))}
+                  onChange={(e) => handleQuantityChange(e.target.value)}
                 />
               </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="new-value">Value USD (optional)</Label>
+
+              {/* Value USD — auto-computed when live price available */}
+              <div className="space-y-1.5 sm:col-span-2">
+                <Label htmlFor="new-value" className="flex items-center gap-1.5">
+                  Value (USD)
+                  {autoValue && (
+                    <span className="text-[10px] font-semibold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.5 rounded-full flex items-center gap-0.5">
+                      <Zap className="h-2.5 w-2.5" /> Auto
+                    </span>
+                  )}
+                </Label>
                 <Input
                   id="new-value"
                   type="number"
@@ -245,7 +387,10 @@ export default function PortfolioPage() {
                   step="any"
                   placeholder="Position value"
                   value={addForm.value_usd}
-                  onChange={(e) => setAddForm((f) => ({ ...f, value_usd: e.target.value }))}
+                  onChange={(e) => {
+                    setAutoValue(false);
+                    setAddForm((f) => ({ ...f, value_usd: e.target.value }));
+                  }}
                 />
               </div>
             </div>
@@ -259,7 +404,7 @@ export default function PortfolioPage() {
                 type="button"
                 size="sm"
                 variant="ghost"
-                onClick={() => { setShowAddForm(false); setAddForm(emptyAddForm); setAddError(null); }}
+                onClick={() => { setShowAddForm(false); resetAddForm(); }}
               >
                 Cancel
               </Button>

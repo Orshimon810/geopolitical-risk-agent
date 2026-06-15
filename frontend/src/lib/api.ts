@@ -150,4 +150,16 @@ export const api = {
   deleteHolding(id: string): Promise<void> {
     return apiFetch<void>(`/portfolio/holdings/${id}`, { method: "DELETE" });
   },
+
+  searchTickers(q: string): Promise<{ ticker: string; name: string; asset_type: string }[]> {
+    return apiFetch<{ ticker: string; name: string; asset_type: string }[]>(
+      `/portfolio/search?q=${encodeURIComponent(q)}`
+    );
+  },
+
+  getTickerQuote(ticker: string): Promise<{ ticker: string; price: number | null; currency: string }> {
+    return apiFetch<{ ticker: string; price: number | null; currency: string }>(
+      `/portfolio/quote?ticker=${encodeURIComponent(ticker)}`
+    );
+  },
 };
