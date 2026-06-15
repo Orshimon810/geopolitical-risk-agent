@@ -77,5 +77,6 @@ class HistoryItemResponse(BaseModel):
                 "signals":              report.get("signals", {}),
                 "data_contradictions":  report.get("data_contradictions", []),
                 "review_log":           report.get("review_log", []),
+                "portfolio_impacts":    report.get("portfolio_impacts"),
             },
         }
