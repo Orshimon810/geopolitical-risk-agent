@@ -317,8 +317,7 @@ def analysis_node(state: DynamicAgentState) -> DynamicAgentState:
     portfolio: Optional[list[PortfolioHolding]] = state.get("portfolio")
 
     logger.info(
-        "analysis_node: state_keys=%s | portfolio=%s (%d holdings)",
-        sorted(k for k in state.keys()),
+        "analysis_node: portfolio=%s (%d holdings)",
         "SET" if portfolio else "NONE",
         len(portfolio) if portfolio else 0,
     )
