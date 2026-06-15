@@ -78,8 +78,6 @@ export interface TaskStatusResponse {
   sub_questions?: string[];
   created_at: string;
   completed_at: string | null;
-  /** Populated only when status === "WAITING_FOR_INPUT" */
-  sub_questions?: string[];
 }
 
 export interface HistoryItem {
