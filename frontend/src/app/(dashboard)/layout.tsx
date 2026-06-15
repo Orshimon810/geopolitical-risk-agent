@@ -55,6 +55,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <Navbar
           title={title}
           onMobileSidebarOpen={() => setMobileOpen(true)}
+          mobileOpen={mobileOpen}
         />
         <main className="flex-1 overflow-y-auto p-4 md:p-5">{children}</main>
       </div>

@@ -1,8 +1,8 @@
-from georisk_agent.agents.graph import build_graph
+from georisk_agent.agents.graph import build_legacy_graph
 
 
 if __name__ == "__main__":
-    app = build_graph()
+    app = build_legacy_graph()
 
     result = app.invoke(
         {

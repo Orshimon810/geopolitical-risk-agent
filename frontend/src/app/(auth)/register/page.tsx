@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { Loader2, ChevronRight } from "lucide-react";
+import { Loader2, ChevronRight, Eye, EyeOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -28,6 +28,7 @@ export default function RegisterPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -101,15 +102,28 @@ export default function RegisterPage() {
             <Label htmlFor="password" className="text-[10px] uppercase tracking-widest text-slate-600 data-mono">
               Password
             </Label>
-            <Input
-              id="password"
-              type="password"
-              placeholder="Min. 8 characters"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              autoComplete="new-password"
-            />
+            <div className="relative">
+              <Input
+                id="password"
+                type={showPassword ? "text" : "password"}
+                placeholder="Min. 8 characters"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                autoComplete="new-password"
+                className="pr-10"
+              />
+              <button
+                type="button"
+                onClick={() => setShowPassword((v) => !v)}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-amber-400 transition-colors cursor-pointer focus-visible:outline-none"
+                aria-label={showPassword ? "Hide password" : "Show password"}
+              >
+                {showPassword
+                  ? <EyeOff className="h-3.5 w-3.5" />
+                  : <Eye    className="h-3.5 w-3.5" />}
+              </button>
+            </div>
             {password.length > 0 && (
               <ul className="space-y-0.5 pt-1">
                 {PW_HINTS.map(({ label, test }) => {

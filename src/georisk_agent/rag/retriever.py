@@ -1,7 +1,6 @@
 """
-RAG retriever — backed by pgvector (Neon) instead of local ChromaDB.
+RAG retriever — backed by pgvector (Neon).
 
-Public interface is identical to the old Chroma-backed version:
     retrieve(query, k) -> list[{"text": str, "source": str}]
 
 Threading model
@@ -26,7 +25,7 @@ from openai import OpenAI
 
 from georisk_agent.app.config import settings
 from georisk_agent.db.client import get_session
-from georisk_agent.db.dal import semantic_search
+from georisk_agent.db.dal import semantic_search, semantic_search_ephemeral
 
 logger = logging.getLogger(__name__)
 
@@ -103,8 +102,6 @@ def retrieve(query: str, k: int = 5) -> list[dict[str, Any]]:
     Retrieve the top-k most semantically relevant chunks for a query.
 
     Returns a list of dicts: {"text": str, "source": str}
-    Identical contract to the old Chroma-backed retriever so rag_research_node
-    and all callers require zero changes.
     """
     if not settings.database_url:
         logger.warning(
@@ -121,3 +118,36 @@ def retrieve(query: str, k: int = 5) -> list[dict[str, Any]]:
 
     results = _run_async(_search())
     return [{"text": r["text"], "source": r["source"]} for r in results]
+
+
+def retrieve_ephemeral(query: str, k: int = 2, max_distance: float = 0.45) -> list[dict[str, Any]]:
+    """
+    Retrieve the top-k live news chunks from ephemeral_embeddings.
+
+    Only returns non-expired rows that pass the cosine distance threshold
+    (max_distance=0.45 means similarity > 0.55 — on-topic news only).
+    Empirically calibrated: Iran/energy news scores ~0.40 against related queries.
+
+    Returns a list of dicts: {"text", "source", "title", "url", "live": True}
+    Returns [] if the table is empty or no news is relevant to the query.
+    """
+    if not settings.database_url:
+        return []
+
+    embedding = _embed(query)
+
+    async def _search() -> list[dict[str, Any]]:
+        async with get_session() as session:
+            return await semantic_search_ephemeral(session, embedding, k=k, max_distance=max_distance)
+
+    results = _run_async(_search())
+    return [
+        {
+            "text": r["text"],
+            "source": r["source"],
+            "title": r["title"],
+            "url": r["url"],
+            "live": True,
+        }
+        for r in results
+    ]

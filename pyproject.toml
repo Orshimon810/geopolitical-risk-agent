@@ -11,12 +11,10 @@ dependencies = [
   "langgraph>=0.2.0",
   "langchain-openai>=0.1.20",
   "openai>=1.0.0",               # direct SDK used by ingest scripts
-  "tiktoken>=0.7.0",
 
   # --- Data / signals ---
   "requests>=2.32.0",
   "yfinance>=0.2.40",
-  "beautifulsoup4>=4.12.0",
 
   # --- Web framework ---
   "fastapi>=0.111.0",

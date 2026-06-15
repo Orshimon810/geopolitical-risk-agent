@@ -17,9 +17,10 @@ import { useAuth } from "@/context/AuthContext";
 interface NavbarProps {
   title: string;
   onMobileSidebarOpen: () => void;
+  mobileOpen?: boolean;
 }
 
-export function Navbar({ title, onMobileSidebarOpen }: NavbarProps) {
+export function Navbar({ title, onMobileSidebarOpen, mobileOpen = false }: NavbarProps) {
   const { logout, token } = useAuth();
 
   // Decode JWT payload for display (no verification needed — display only)
@@ -40,9 +41,11 @@ export function Navbar({ title, onMobileSidebarOpen }: NavbarProps) {
       {/* Left: hamburger (mobile only) + page title */}
       <div className="flex items-center gap-3 min-w-0">
         <button
-          className="md:hidden flex h-7 w-7 items-center justify-center rounded-md border border-slate-800 bg-slate-900 text-slate-500 hover:text-amber-400 hover:border-amber-600/40 transition-colors shrink-0"
+          className="md:hidden flex h-11 w-11 items-center justify-center rounded-md border border-slate-800 bg-slate-900 text-slate-500 hover:text-amber-400 hover:border-amber-600/40 transition-colors shrink-0 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-500/50"
           onClick={onMobileSidebarOpen}
           aria-label="Open sidebar"
+          aria-expanded={mobileOpen}
+          aria-controls="mobile-sidebar"
         >
           <Menu className="h-4 w-4" />
         </button>
@@ -64,7 +67,7 @@ export function Navbar({ title, onMobileSidebarOpen }: NavbarProps) {
         {/* User menu */}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <button className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-slate-800 transition-colors group">
+            <button className="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-slate-800 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-500/50 group">
               <Avatar className="h-6 w-6 border border-slate-700 group-hover:border-amber-600/40 transition-colors">
                 <AvatarFallback className="text-[10px] font-bold bg-amber-500/10 text-amber-400 data-mono">
                   {initials}

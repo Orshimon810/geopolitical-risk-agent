@@ -1,6 +1,6 @@
 """Pydantic v2 request/response schemas for the agent task endpoints."""
 
-from typing import Any, Literal
+from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -17,6 +17,15 @@ class AnalyzeRequest(BaseModel):
     )
 
 
+class ApprovePlanRequest(BaseModel):
+    sub_questions: List[str] = Field(
+        min_length=1,
+        max_length=8,
+        description="The (possibly edited) sub-questions to use for retrieval. "
+                    "Send the original list unchanged to accept without edits.",
+    )
+
+
 class TaskCreatedResponse(BaseModel):
     status: str = "Task Created"
     task_id: str
@@ -24,11 +33,14 @@ class TaskCreatedResponse(BaseModel):
 
 class TaskStatusResponse(BaseModel):
     task_id: str
-    status: Literal["PENDING", "PROCESSING", "SUCCESS", "FAILED"]
-    result: dict[str, Any] | None = None
-    error: str | None = None
-    created_at: str | None = None
-    completed_at: str | None = None
+    status: Literal["PENDING", "PROCESSING", "WAITING_FOR_INPUT", "SUCCESS", "FAILED"]
+    result: Optional[dict[str, Any]] = None
+    error: Optional[str] = None
+    created_at: Optional[str] = None
+    completed_at: Optional[str] = None
+    # Populated only when status == "WAITING_FOR_INPUT"
+    sub_questions: Optional[List[str]] = None
+    cached: Optional[bool] = None
 
 
 class HistoryItemResponse(BaseModel):
@@ -56,12 +68,14 @@ class HistoryItemResponse(BaseModel):
             "created_at": v.created_at.isoformat(),
             "market_impacts": report.get("market_impacts", []),
             "result": {
-                "market_impacts": report.get("market_impacts", []),
-                "risks": report.get("risks", []),
-                "scenarios": report.get("scenarios", []),
-                "investor_takeaway": report.get("investor_takeaway", []),
-                "confidence": v.confidence,
-                "sources": report.get("sources", []),
-                "signals": report.get("signals", {}),
+                "market_impacts":       report.get("market_impacts", []),
+                "risks":                report.get("risks", []),
+                "scenarios":            report.get("scenarios", []),
+                "investor_takeaway":    report.get("investor_takeaway", []),
+                "confidence":           v.confidence,
+                "sources":              report.get("sources", []),
+                "signals":              report.get("signals", {}),
+                "data_contradictions":  report.get("data_contradictions", []),
+                "review_log":           report.get("review_log", []),
             },
         }

@@ -32,6 +32,7 @@ export function Sidebar({ collapsed, onToggle, mobileOpen, onMobileClose }: Side
       )}
 
       <aside
+        id="mobile-sidebar"
         className={cn(
           // Base
           "flex flex-col border-r border-slate-800 bg-slate-950 transition-all duration-300 ease-in-out",
@@ -60,7 +61,7 @@ export function Sidebar({ collapsed, onToggle, mobileOpen, onMobileClose }: Side
 
           {/* Mobile close button */}
           <button
-            className="md:hidden flex h-7 w-7 items-center justify-center rounded-md text-slate-500 hover:text-slate-200 transition-colors"
+            className="md:hidden flex h-11 w-11 items-center justify-center rounded-md text-slate-500 hover:text-slate-200 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-500/50"
             onClick={onMobileClose}
             aria-label="Close sidebar"
           >
@@ -111,7 +112,8 @@ export function Sidebar({ collapsed, onToggle, mobileOpen, onMobileClose }: Side
         {/* Desktop collapse toggle */}
         <button
           onClick={onToggle}
-          className="hidden md:flex absolute -right-3 top-1/2 -translate-y-1/2 h-6 w-6 items-center justify-center rounded-full border border-slate-700 bg-slate-900 text-slate-500 hover:text-amber-400 hover:border-amber-600/40 transition-colors z-10"
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          className="hidden md:flex absolute -right-3 top-1/2 -translate-y-1/2 h-6 w-6 items-center justify-center rounded-full border border-slate-700 bg-slate-900 text-slate-500 hover:text-amber-400 hover:border-amber-600/40 transition-colors z-10 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-500/50"
         >
           {collapsed ? <ChevronRight className="h-3 w-3" /> : <ChevronLeft className="h-3 w-3" />}
         </button>

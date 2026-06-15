@@ -43,6 +43,20 @@ class Settings(BaseModel):
     smtp_from: str = os.getenv("SMTP_FROM", "onboarding@resend.dev")
     frontend_url: str = os.getenv("FRONTEND_URL", "http://localhost:3000")
 
+    # --- Ephemeral news cache ---
+    # Provider: "newsapi" (newsapi.org) or "finnhub" (finnhub.io)
+    news_provider: str = os.getenv("NEWS_PROVIDER", "newsapi")
+    newsapi_key: str = os.getenv("NEWSAPI_KEY", "")
+    finnhub_api_key: str = os.getenv("FINNHUB_API_KEY", "")
+    # How long (hours) a news article lives in ephemeral_embeddings before being flushed
+    ephemeral_ttl_hours: int = int(os.getenv("EPHEMERAL_TTL_HOURS", "48"))
+
+    # --- Dynamic pipeline (Reviewer loop + HITL) ---
+    # Max reviewer retries per analysis run (0 = reviewer runs but never retries)
+    max_retries: int = int(os.getenv("MAX_RETRIES", "1"))
+    # Minutes before a WAITING_FOR_INPUT task is auto-approved with the original plan
+    hitl_timeout_minutes: int = int(os.getenv("HITL_TIMEOUT_MINUTES", "10"))
+
     @property
     def is_prod(self) -> bool:
         return self.app_env == "prod"
