@@ -24,7 +24,7 @@ from sqlalchemy import delete, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from georisk_agent.db.models import AnalysisHistory, EphemeralNewsEmbedding, GeopoliticalEmbedding, PasswordResetToken, User
+from georisk_agent.db.models import AnalysisHistory, EphemeralNewsEmbedding, GeopoliticalEmbedding, PasswordResetToken, User, UserPortfolio
 
 logger = logging.getLogger(__name__)
 
@@ -496,6 +496,105 @@ async def delete_user_history(
         delete(AnalysisHistory).where(AnalysisHistory.user_id == user_id)
     )
     return result.rowcount  # type: ignore[return-value]
+
+
+# =============================================================================
+# Portfolio holdings
+# =============================================================================
+
+async def get_user_portfolio(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+) -> list[UserPortfolio]:
+    """Return all holdings for a user, ordered by creation date."""
+    result = await session.execute(
+        select(UserPortfolio)
+        .where(UserPortfolio.user_id == user_id)
+        .order_by(UserPortfolio.created_at.asc())
+    )
+    return list(result.scalars().all())
+
+
+async def count_holdings(session: AsyncSession, user_id: uuid.UUID) -> int:
+    """Return the number of holdings for a user."""
+    result = await session.execute(
+        select(UserPortfolio).where(UserPortfolio.user_id == user_id)
+    )
+    return len(result.scalars().all())
+
+
+async def add_holding(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    ticker: str,
+    name: str,
+    asset_type: str,
+    quantity: float | None = None,
+    value_usd: float | None = None,
+) -> UserPortfolio:
+    """
+    Add a new holding to a user's portfolio.
+    Raises IntegrityError if the ticker already exists for this user.
+    """
+    holding = UserPortfolio(
+        user_id=user_id,
+        ticker=ticker.upper(),
+        name=name,
+        asset_type=asset_type,
+        quantity=quantity,
+        value_usd=value_usd,
+    )
+    session.add(holding)
+    await session.flush()
+    return holding
+
+
+async def update_holding(
+    session: AsyncSession,
+    holding_id: uuid.UUID,
+    user_id: uuid.UUID,
+    *,
+    name: str | None = None,
+    quantity: float | None | type(...) = ...,
+    value_usd: float | None | type(...) = ...,
+) -> UserPortfolio | None:
+    """
+    Update mutable fields of a holding. Returns None if not found or wrong owner.
+    Pass Ellipsis (...) to leave a field unchanged; pass None to clear it.
+    """
+    result = await session.execute(
+        select(UserPortfolio)
+        .where(UserPortfolio.id == holding_id)
+        .where(UserPortfolio.user_id == user_id)
+    )
+    holding = result.scalar_one_or_none()
+    if holding is None:
+        return None
+
+    if name is not None:
+        holding.name = name
+    if quantity is not ...:
+        holding.quantity = quantity  # type: ignore[assignment]
+    if value_usd is not ...:
+        holding.value_usd = value_usd  # type: ignore[assignment]
+
+    await session.flush()
+    return holding
+
+
+async def delete_holding(
+    session: AsyncSession,
+    holding_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> bool:
+    """Delete a holding by ID, enforcing ownership. Returns True if deleted."""
+    result = await session.execute(
+        delete(UserPortfolio)
+        .where(UserPortfolio.id == holding_id)
+        .where(UserPortfolio.user_id == user_id)
+    )
+    return result.rowcount > 0  # type: ignore[return-value]
 
 
 # =============================================================================

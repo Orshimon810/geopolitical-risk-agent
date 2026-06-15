@@ -1,9 +1,9 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { AlertTriangle, BarChart2, Lightbulb, GitBranch, BookOpen, Map } from "lucide-react";
+import { AlertTriangle, BarChart2, Lightbulb, GitBranch, BookOpen, Map, Briefcase } from "lucide-react";
 import { MarketSignals } from "@/components/MarketSignals";
-import type { AnalysisResult, Confidence } from "@/lib/types";
+import type { AnalysisResult, Confidence, PortfolioHoldingImpact, Verdict } from "@/lib/types";
 
 interface ResultsDisplayProps {
   result: AnalysisResult;
@@ -89,6 +89,49 @@ function BulletList({ items }: { items: string[] }) {
         </li>
       ))}
     </ul>
+  );
+}
+
+/* ── Per-holding verdict badge ── */
+const VERDICT_STYLES: Record<Verdict, string> = {
+  Bullish: "text-emerald-400 bg-emerald-500/10 border-emerald-500/30",
+  Bearish: "text-rose-400 bg-rose-500/10 border-rose-500/30",
+  Neutral: "text-slate-400 bg-slate-700/40 border-slate-600/30",
+};
+
+function PortfolioImpactCard({ impact }: { impact: PortfolioHoldingImpact }) {
+  return (
+    <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-4 space-y-3">
+      {/* Header row */}
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <span className="font-mono font-bold text-slate-100 text-sm">{impact.ticker}</span>
+          <span className="ml-2 text-xs text-slate-500">{impact.name}</span>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <span className={`text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border ${VERDICT_STYLES[impact.verdict]}`}>
+            {impact.verdict}
+          </span>
+          <span className="text-[10px] text-slate-600 data-mono">{impact.confidence}</span>
+        </div>
+      </div>
+
+      {/* Impact rows */}
+      <div className="space-y-2">
+        <div className="grid grid-cols-[5rem_1fr] gap-2 text-xs">
+          <span className="text-slate-600 font-medium pt-0.5">Short-term</span>
+          <span className="text-slate-300 leading-relaxed">{impact.short_term_impact}</span>
+        </div>
+        <div className="grid grid-cols-[5rem_1fr] gap-2 text-xs">
+          <span className="text-slate-600 font-medium pt-0.5">Long-term</span>
+          <span className="text-slate-300 leading-relaxed">{impact.long_term_impact}</span>
+        </div>
+        <div className="grid grid-cols-[5rem_1fr] gap-2 text-xs">
+          <span className="text-slate-600 font-medium pt-0.5">Reasoning</span>
+          <span className="text-slate-400 leading-relaxed">{impact.reasoning}</span>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -184,6 +227,21 @@ export function ResultsDisplay({ result, query }: ResultsDisplayProps) {
             delay={0.25}
           >
             <MarketSignals signals={result.signals} />
+          </Section>
+        )}
+
+        {/* Portfolio Impact */}
+        {result.portfolio_impacts && result.portfolio_impacts.length > 0 && (
+          <Section
+            label="PORTFOLIO IMPACT"
+            icon={<Briefcase className="h-3 w-3" />}
+            delay={0.28}
+          >
+            <div className="space-y-3">
+              {result.portfolio_impacts.map((impact, i) => (
+                <PortfolioImpactCard key={i} impact={impact} />
+              ))}
+            </div>
           </Section>
         )}
 

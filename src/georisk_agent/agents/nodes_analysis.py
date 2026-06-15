@@ -1,15 +1,31 @@
-from typing import List, Dict, Any, Literal
+from typing import List, Dict, Any, Literal, Optional
 
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
 from georisk_agent.app.config import settings
-from georisk_agent.app.types import AgentState
+from georisk_agent.app.types import AgentState, PortfolioHolding
 
 
 # -------------------------
 # Structured output schema
 # -------------------------
+
+class PortfolioHoldingImpact(BaseModel):
+    ticker: str
+    name: str
+    verdict: Literal["Bullish", "Bearish", "Neutral"]
+    short_term_impact: str = Field(
+        description="1-2 sentence impact over days/weeks."
+    )
+    long_term_impact: str = Field(
+        description="1-2 sentence impact over months/quarters."
+    )
+    confidence: Literal["Low", "Medium", "High"]
+    reasoning: str = Field(
+        description="Brief causal chain connecting the geopolitical event to this specific holding."
+    )
+
 
 class AnalysisOutput(BaseModel):
     reasoning: str = Field(
@@ -49,6 +65,13 @@ class AnalysisOutput(BaseModel):
             "(e.g. 'BeInCrypto — Iran ceasefire market reaction', 'Yahoo Finance — Oil markets'). "
             "For historical corpus items, cite the document or dataset name. "
             "Never use generic placeholders like 'Market analysis reports' or 'Bloomberg; Datastream'."
+        )
+    )
+    portfolio_impacts: Optional[list[PortfolioHoldingImpact]] = Field(
+        default=None,
+        description=(
+            "Per-holding impact assessment. Populate ONLY when the user's portfolio is provided below. "
+            "Leave null if no portfolio section appears in the prompt."
         )
     )
 
@@ -123,12 +146,55 @@ def _format_evidence(
 
 
 # -------------------------
+# Portfolio prompt helpers
+# -------------------------
+
+def _format_portfolio_block(
+    holdings: list[PortfolioHolding],
+    portfolio_prices: dict[str, Any],
+) -> str:
+    lines = ["Portfolio positions to assess:"]
+    for h in holdings:
+        ticker = h.get("ticker", "")
+        name = h.get("name", "")
+        asset_type = h.get("asset_type", "")
+        qty = h.get("quantity")
+        val = h.get("value_usd")
+
+        price_info = portfolio_prices.get(ticker, {})
+        if price_info.get("status") == "ok":
+            price_str = f"${price_info['price']:.2f} ({price_info['change_1d_pct']:+.1f}% today)"
+        else:
+            price_str = "price unavailable"
+
+        meta_parts = []
+        if qty is not None:
+            meta_parts.append(f"qty: {qty}")
+        if val is not None:
+            meta_parts.append(f"value: ${val:,.2f}")
+        meta_str = f" — {', '.join(meta_parts)}" if meta_parts else ""
+
+        lines.append(f"  • {ticker} ({name}, {asset_type}){meta_str} | {price_str}")
+
+    lines.append(
+        "\nFor EACH holding above, provide a PortfolioHoldingImpact entry covering:\n"
+        "  - verdict: Bullish / Bearish / Neutral\n"
+        "  - short_term_impact: effect over days/weeks\n"
+        "  - long_term_impact: effect over months/quarters\n"
+        "  - confidence: Low / Medium / High\n"
+        "  - reasoning: specific causal chain linking this geopolitical event to this asset"
+    )
+    return "\n".join(lines)
+
+
+# -------------------------
 # Analysis Node
 # -------------------------
 
 def analysis_node(state: AgentState) -> AgentState:
     """
     Evidence-grounded, scenario-aware market impact analysis.
+    When state["portfolio"] is set, also produces per-holding impact assessments.
     """
 
     query = state.get("query", "")
@@ -136,6 +202,7 @@ def analysis_node(state: AgentState) -> AgentState:
     retrieved_chunks = state.get("retrieved_chunks", [])
     signals = state.get("signals", {})
     source_quality = state.get("source_quality") or {}
+    portfolio: list[PortfolioHolding] | None = state.get("portfolio")
 
     evidence_block = _format_evidence(retrieved_chunks, max_items=12)
 
@@ -175,6 +242,11 @@ def analysis_node(state: AgentState) -> AgentState:
         if n_questions > 0 else ""
     )
 
+    portfolio_block = ""
+    if portfolio:
+        portfolio_prices = signals.get("portfolio_prices", {})
+        portfolio_block = "\n\n" + _format_portfolio_block(portfolio, portfolio_prices)
+
     prompt = f"""
 You are a senior geopolitical risk analyst advising institutional investors.
 
@@ -192,6 +264,7 @@ Evidence:
 {coverage_line}
 
 {signals_block}
+{portfolio_block}
 
 Structural rules:
 - Do NOT introduce risks inside market_impacts.
@@ -232,6 +305,7 @@ Source citation discipline:
     investor_takeaway = output.investor_takeaway
     confidence = output.confidence
     sources = output.sources
+    portfolio_impacts = [p.model_dump() for p in output.portfolio_impacts] if output.portfolio_impacts else None
 
     # -------------------------
     # Defensive fallbacks
@@ -270,6 +344,7 @@ Source citation discipline:
         "investor_takeaway": investor_takeaway[:1],
         "confidence": confidence,
         "sources": sources,
+        "portfolio_impacts": portfolio_impacts,
         "debug": {
             **(state.get("debug") or {}),
             "analysis_reasoning": output.reasoning,

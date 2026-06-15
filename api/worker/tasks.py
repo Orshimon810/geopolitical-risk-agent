@@ -49,7 +49,7 @@ def _patch_task_state(r: sync_redis.Redis, task_id: str, patch: dict) -> None:
 
 
 def _extract_result(values: dict) -> dict[str, Any]:
-    return {
+    result: dict[str, Any] = {
         "market_impacts":      values.get("market_impacts", []),
         "risks":               values.get("risks", []),
         "scenarios":           values.get("scenarios", []),
@@ -60,6 +60,9 @@ def _extract_result(values: dict) -> dict[str, Any]:
         "review_log":          values.get("review_log", []),
         "data_contradictions": values.get("data_contradictions", []),
     }
+    if values.get("portfolio_impacts") is not None:
+        result["portfolio_impacts"] = values["portfolio_impacts"]
+    return result
 
 
 def _persist_analysis(*, user_id: str, query: str, result: dict[str, Any]) -> None:
@@ -100,10 +103,17 @@ def _persist_analysis(*, user_id: str, query: str, result: dict[str, Any]) -> No
 
 
 @celery_app.task(bind=True, name="tasks.run_geopolitical_agent")
-def run_geopolitical_agent_task(self, query: str, user_id: str) -> dict:
+def run_geopolitical_agent_task(
+    self,
+    query: str,
+    user_id: str,
+    portfolio: list[dict] | None = None,
+) -> dict:
     """
     Task A — runs the planner node and writes WAITING_FOR_INPUT to Redis.
     No external checkpointer: the plan is stored as plain JSON in task state.
+    portfolio is serialised holding dicts from the analyze endpoint; stored in
+    task state so Task B can inject them into the graph's initial state.
     """
     task_id = self.request.id
     r = _sync_redis()
@@ -127,14 +137,18 @@ def run_geopolitical_agent_task(self, query: str, user_id: str) -> dict:
         after_planner = planner_node(initial_state)
         sub_questions = after_planner.get("plan", [])
 
-        _patch_task_state(r, task_id, {
+        patch: dict = {
             "status": "WAITING_FOR_INPUT",
             "sub_questions": sub_questions,
             "approved_plan": sub_questions,   # default; overwritten by approve-plan endpoint
             "user_id": user_id,
             "query": query,
             "waiting_since": datetime.now(timezone.utc).isoformat(),
-        })
+        }
+        if portfolio is not None:
+            patch["portfolio"] = portfolio
+
+        _patch_task_state(r, task_id, patch)
         logger.info("Task %s WAITING_FOR_INPUT | sub_questions=%d", task_id, len(sub_questions))
         return {"status": "WAITING_FOR_INPUT", "sub_questions": sub_questions}
 
@@ -165,6 +179,7 @@ def resume_geopolitical_agent_task(self, original_task_id: str, user_id: str) ->
     task_state = json.loads(raw) if raw else {}
     query         = task_state.get("query", "")
     approved_plan = task_state.get("approved_plan") or task_state.get("sub_questions", [])
+    portfolio     = task_state.get("portfolio")  # None when not a portfolio analysis run
 
     try:
         from georisk_agent.agents.graph import build_resume_graph
@@ -181,6 +196,8 @@ def resume_geopolitical_agent_task(self, original_task_id: str, user_id: str) ->
             "rewritten_queries": [],
             "data_contradictions": [],
         }
+        if portfolio is not None:
+            initial_state["portfolio"] = portfolio
 
         final_state: dict = graph.invoke(initial_state)
         result = _extract_result(final_state)
@@ -193,7 +210,9 @@ def resume_geopolitical_agent_task(self, original_task_id: str, user_id: str) ->
         })
         logger.info("Task %s SUCCESS (resume)", original_task_id)
 
-        set_cached_result_sync(r, query, result, settings.query_cache_ttl_seconds)
+        # Portfolio results are user-specific — never write them to the shared query cache.
+        if portfolio is None:
+            set_cached_result_sync(r, query, result, settings.query_cache_ttl_seconds)
 
         try:
             _persist_analysis(user_id=user_id, query=query, result=result)

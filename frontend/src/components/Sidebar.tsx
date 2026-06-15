@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Globe, History, ChevronLeft, ChevronRight, X } from "lucide-react";
+import { Globe, History, Briefcase, ChevronLeft, ChevronRight, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
-  { href: "/analysis", label: "New Analysis", icon: Globe },
-  { href: "/history",  label: "History",      icon: History },
+  { href: "/analysis",  label: "New Analysis", icon: Globe },
+  { href: "/portfolio", label: "Portfolio",     icon: Briefcase },
+  { href: "/history",   label: "History",       icon: History },
 ];
 
 interface SidebarProps {

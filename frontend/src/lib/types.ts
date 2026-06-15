@@ -36,6 +36,29 @@ export interface Signals {
   note?: string;
 }
 
+export type AssetType = "stock" | "etf" | "crypto" | "commodity" | "bond";
+export type Verdict = "Bullish" | "Bearish" | "Neutral";
+
+export interface PortfolioHolding {
+  id: string;
+  ticker: string;
+  name: string;
+  asset_type: AssetType;
+  quantity: number | null;
+  value_usd: number | null;
+  created_at: string;
+}
+
+export interface PortfolioHoldingImpact {
+  ticker: string;
+  name: string;
+  verdict: Verdict;
+  short_term_impact: string;
+  long_term_impact: string;
+  confidence: Confidence;
+  reasoning: string;
+}
+
 export interface AnalysisResult {
   market_impacts: string[];
   risks: string[];
@@ -44,6 +67,7 @@ export interface AnalysisResult {
   confidence: Confidence;
   sources: string[];
   signals: Signals;
+  portfolio_impacts?: PortfolioHoldingImpact[] | null;
 }
 
 export interface TaskStatusResponse {
@@ -51,6 +75,7 @@ export interface TaskStatusResponse {
   status: TaskStatus;
   result: AnalysisResult | null;
   error: string | null;
+  sub_questions?: string[];
   created_at: string;
   completed_at: string | null;
   /** Populated only when status === "WAITING_FOR_INPUT" */

@@ -22,8 +22,10 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -208,6 +210,42 @@ class EphemeralNewsEmbedding(Base):
 
     def __repr__(self) -> str:
         return f"<EphemeralNewsEmbedding source={self.source!r} title={self.title[:40]!r}>"
+
+
+# =============================================================================
+# User Portfolio Holdings
+# =============================================================================
+
+class UserPortfolio(Base):
+    __tablename__ = "user_portfolios"
+    __table_args__ = (
+        CheckConstraint(
+            "asset_type IN ('stock', 'etf', 'crypto', 'commodity', 'bond')",
+            name="chk_portfolio_asset_type",
+        ),
+        UniqueConstraint("user_id", "ticker", name="uq_portfolio_user_ticker"),
+        Index("idx_user_portfolios_user_id", "user_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    ticker: Mapped[str] = mapped_column(String(20), nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    asset_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    quantity: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    value_usd: Mapped[float | None] = mapped_column(Numeric(18, 2), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+    def __repr__(self) -> str:
+        return f"<UserPortfolio user_id={self.user_id} ticker={self.ticker!r}>"
 
 
 # =============================================================================

@@ -1,4 +1,4 @@
-from typing import TypedDict, List, Dict, Any
+from typing import TypedDict, List, Dict, Any, Optional
 
 
 class Evidence(TypedDict):
@@ -9,6 +9,14 @@ class Evidence(TypedDict):
     title: str
     url: str
     snippet: str
+
+
+class PortfolioHolding(TypedDict, total=False):
+    ticker: str
+    name: str
+    asset_type: str       # stock | etf | crypto | commodity | bond
+    quantity: Optional[float]
+    value_usd: Optional[float]
 
 
 class SourceQuality(TypedDict):
@@ -87,6 +95,13 @@ class DynamicAgentState(TypedDict, total=False):
     max_retries: int
     rewritten_queries: List[str]
     # Sub-question rewrites from the Reviewer; takes priority on retry cycles.
+
+    # ── Portfolio analysis (opt-in per query) ───────────────────────
+    portfolio: Optional[List[PortfolioHolding]]
+    # None = not opted in; list = holdings to analyse per-ticker
+
+    portfolio_impacts: Optional[List[Dict[str, Any]]]
+    # Serialised PortfolioHoldingImpact dicts; populated by analysis_node
 
     # ── Internal routing (stripped by final_output_node) ─────────────
     reviewer_verdict: str           # "PASS" | "RETRY"

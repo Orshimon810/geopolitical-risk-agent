@@ -1,4 +1,4 @@
-import type { TaskStatusResponse } from "./types";
+import type { PortfolioHolding, TaskStatusResponse } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -70,10 +70,10 @@ export const api = {
     );
   },
 
-  analyzeQuery(query: string) {
+  analyzeQuery(query: string, includePortfolio = false) {
     return apiFetch<{ status: string; task_id: string }>("/agent/analyze", {
       method: "POST",
-      body: JSON.stringify({ query }),
+      body: JSON.stringify({ query, include_portfolio: includePortfolio }),
     });
   },
 
@@ -116,5 +116,38 @@ export const api = {
 
   logout() {
     return apiFetch<{ message: string }>("/auth/logout", { method: "POST" });
+  },
+
+  // ── Portfolio ─────────────────────────────────────────────────────────────
+
+  getPortfolio(): Promise<PortfolioHolding[]> {
+    return apiFetch<PortfolioHolding[]>("/portfolio/holdings");
+  },
+
+  addHolding(data: {
+    ticker: string;
+    name: string;
+    asset_type: string;
+    quantity?: number | null;
+    value_usd?: number | null;
+  }): Promise<PortfolioHolding> {
+    return apiFetch<PortfolioHolding>("/portfolio/holdings", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  },
+
+  updateHolding(
+    id: string,
+    data: { name?: string; quantity?: number | null; value_usd?: number | null }
+  ): Promise<PortfolioHolding> {
+    return apiFetch<PortfolioHolding>(`/portfolio/holdings/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  },
+
+  deleteHolding(id: string): Promise<void> {
+    return apiFetch<void>(`/portfolio/holdings/${id}`, { method: "DELETE" });
   },
 };

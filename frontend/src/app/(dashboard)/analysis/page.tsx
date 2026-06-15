@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
+import Link from "next/link";
 import { Send, Loader2, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -28,6 +29,15 @@ export default function AnalysisPage() {
   const [subQuestions, setSubQuestions] = useState<string[]>([]);
   const [taskId, setTaskId]         = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const [includePortfolio, setIncludePortfolio] = useState(false);
+  const [portfolioCount, setPortfolioCount]     = useState<number | null>(null);
+
+  useEffect(() => {
+    api.getPortfolio()
+      .then((holdings) => setPortfolioCount(holdings.length))
+      .catch(() => setPortfolioCount(0));
+  }, []);
 
   const stopPolling = () => {
     if (pollRef.current) {
@@ -76,14 +86,14 @@ export default function AnalysisPage() {
     setSubQuestions([]);
 
     try {
-      const { task_id } = await api.analyzeQuery(query.trim());
+      const { task_id } = await api.analyzeQuery(query.trim(), includePortfolio);
       setTaskId(task_id);
       startPolling(task_id);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to start analysis");
       setUiState("error");
     }
-  }, [query, uiState, startPolling]);
+  }, [query, uiState, startPolling, includePortfolio]);
 
   const handleApprove = useCallback(async (questions: string[]) => {
     if (!taskId) return;
@@ -138,6 +148,45 @@ export default function AnalysisPage() {
             className="text-sm leading-relaxed"
           />
           <p className="text-[10px] text-slate-600">{query.length}/2000 characters · minimum 10</p>
+        </div>
+
+        {/* Portfolio toggle */}
+        <div className="flex items-center gap-2.5">
+          <button
+            type="button"
+            role="checkbox"
+            aria-checked={includePortfolio}
+            disabled={!portfolioCount || uiState !== "idle"}
+            onClick={() => setIncludePortfolio((v) => !v)}
+            className={`relative h-4 w-4 shrink-0 rounded border transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-500/50 cursor-pointer disabled:cursor-not-allowed disabled:opacity-40 ${
+              includePortfolio
+                ? "bg-amber-500 border-amber-500"
+                : "border-slate-600 bg-slate-800"
+            }`}
+          >
+            {includePortfolio && (
+              <svg className="absolute inset-0 h-full w-full p-0.5 text-slate-950" viewBox="0 0 12 12" fill="none">
+                <path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            )}
+          </button>
+          <label
+            className={`text-xs select-none ${portfolioCount ? "text-slate-400 cursor-pointer" : "text-slate-600 cursor-not-allowed"}`}
+            onClick={() => portfolioCount && uiState === "idle" && setIncludePortfolio((v) => !v)}
+          >
+            Include my portfolio analysis
+            {portfolioCount === 0 && (
+              <span className="ml-1.5 text-slate-600">
+                —{" "}
+                <Link href="/portfolio" className="text-amber-600 hover:text-amber-400 transition-colors">
+                  add holdings first
+                </Link>
+              </span>
+            )}
+            {portfolioCount != null && portfolioCount > 0 && (
+              <span className="ml-1.5 text-slate-600">({portfolioCount} holdings)</span>
+            )}
+          </label>
         </div>
 
         {/* Example queries */}

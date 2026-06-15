@@ -11,6 +11,10 @@ class AnalyzeRequest(BaseModel):
         max_length=2000,
         description="Geopolitical or market-risk query to analyse",
     )
+    include_portfolio: bool = Field(
+        default=False,
+        description="When True, fetches the user's saved holdings and includes per-ticker impact analysis. Query cache is bypassed for portfolio-enabled requests.",
+    )
 
 
 class ApprovePlanRequest(BaseModel):

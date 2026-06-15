@@ -41,7 +41,7 @@ from api.schemas.agent import (
 )
 from api.worker.tasks import resume_geopolitical_agent_task, run_geopolitical_agent_task
 from georisk_agent.app.config import settings
-from georisk_agent.db.dal import delete_analysis_by_id, get_user_history
+from georisk_agent.db.dal import delete_analysis_by_id, get_user_history, get_user_portfolio
 from georisk_agent.db.models import User
 
 logger = logging.getLogger(__name__)
@@ -74,23 +74,46 @@ async def analyze(
     body: AnalyzeRequest,
     current_user: User = Depends(check_rate_limit),
     redis_client: aioredis.Redis = Depends(get_redis),
+    session: AsyncSession = Depends(db_session),
 ) -> TaskCreatedResponse:
     now     = datetime.now(timezone.utc).isoformat()
     task_id = str(uuid.uuid4())
 
-    cached = await get_cached_result(redis_client, body.query)
-    if cached is not None:
-        logger.info("CACHE HIT | user=%s | query=%r", current_user.id, body.query[:120])
-        hit_state = {
-            "status": "SUCCESS",
-            "result": cached,
-            "error": None,
-            "created_at": now,
-            "completed_at": now,
-            "cached": True,
-        }
-        await redis_client.setex(f"task:{task_id}", _TASK_TTL_SECONDS, json.dumps(hit_state))
-        return TaskCreatedResponse(task_id=task_id)
+    # Portfolio-enabled requests are always user-specific — bypass the shared cache.
+    portfolio_dicts: list[dict] | None = None
+    if body.include_portfolio:
+        holdings = await get_user_portfolio(session, current_user.id)
+        if holdings:
+            portfolio_dicts = [
+                {
+                    "ticker": h.ticker,
+                    "name": h.name,
+                    "asset_type": h.asset_type,
+                    "quantity": float(h.quantity) if h.quantity is not None else None,
+                    "value_usd": float(h.value_usd) if h.value_usd is not None else None,
+                }
+                for h in holdings
+            ]
+        logger.info(
+            "Portfolio analysis requested | user=%s | holdings=%d",
+            current_user.id,
+            len(portfolio_dicts) if portfolio_dicts else 0,
+        )
+
+    if not body.include_portfolio:
+        cached = await get_cached_result(redis_client, body.query)
+        if cached is not None:
+            logger.info("CACHE HIT | user=%s | query=%r", current_user.id, body.query[:120])
+            hit_state = {
+                "status": "SUCCESS",
+                "result": cached,
+                "error": None,
+                "created_at": now,
+                "completed_at": now,
+                "cached": True,
+            }
+            await redis_client.setex(f"task:{task_id}", _TASK_TTL_SECONDS, json.dumps(hit_state))
+            return TaskCreatedResponse(task_id=task_id)
 
     initial_state = {
         "status": "PENDING",
@@ -105,7 +128,7 @@ async def analyze(
     await redis_client.setex(f"task:{task_id}", _TASK_TTL_SECONDS, json.dumps(initial_state))
 
     run_geopolitical_agent_task.apply_async(
-        args=[body.query, str(current_user.id)],
+        args=[body.query, str(current_user.id), portfolio_dicts],
         task_id=task_id,
     )
     return TaskCreatedResponse(task_id=task_id)

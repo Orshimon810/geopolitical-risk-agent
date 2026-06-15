@@ -4,15 +4,16 @@ import { useEffect, useState } from "react";
 import { Sun, Moon } from "lucide-react";
 
 export function ThemeToggle() {
-  const [isDark, setIsDark] = useState(true);
+  // Lazy initializer reads localStorage once on the client; SSR defaults to dark
+  const [isDark, setIsDark] = useState(() => {
+    if (typeof window === "undefined") return true;
+    return localStorage.getItem("georisk-theme") !== "light";
+  });
 
+  // Sync DOM class whenever isDark changes — no setState inside this effect
   useEffect(() => {
-    const stored = localStorage.getItem("georisk-theme");
-    const dark = stored !== "light";
-    document.documentElement.classList.toggle("light", !dark);
-    const t = setTimeout(() => setIsDark(dark), 0);
-    return () => clearTimeout(t);
-  }, []);
+    document.documentElement.classList.toggle("light", !isDark);
+  }, [isDark]);
 
   const toggle = () => {
     const nowDark = !isDark;
@@ -24,8 +25,8 @@ export function ThemeToggle() {
   return (
     <button
       onClick={toggle}
-      className="flex h-11 w-11 md:h-7 md:w-7 shrink-0 items-center justify-center rounded-md border border-slate-800 bg-slate-900 text-slate-500 hover:text-amber-400 hover:border-amber-600/40 transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-500/50"
-      aria-label={isDark ? "Switch to light mode" : "Switch to dark mode"}
+      className="flex h-7 w-7 items-center justify-center rounded-md border border-slate-800 bg-slate-900 text-slate-500 hover:text-amber-400 hover:border-amber-600/40 transition-colors"
+      title={isDark ? "Switch to light mode" : "Switch to dark mode"}
     >
       {isDark
         ? <Sun  className="h-3.5 w-3.5" />

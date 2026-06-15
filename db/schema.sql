@@ -205,6 +205,38 @@ COMMENT ON COLUMN ephemeral_embeddings.expires_at   IS 'Set to ingested_at + EPH
 
 
 -- ============================================================================
+-- TABLE: user_portfolios
+-- Per-user investment holdings. Max 20 tickers per user (enforced in app layer).
+-- Ticker + asset_type are immutable after creation; name/quantity/value_usd are editable.
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS user_portfolios (
+    id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id     UUID        NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+
+    ticker      VARCHAR(20) NOT NULL,
+    name        VARCHAR(100) NOT NULL,
+
+    asset_type  VARCHAR(20) NOT NULL
+                CONSTRAINT chk_portfolio_asset_type
+                CHECK (asset_type IN ('stock', 'etf', 'crypto', 'commodity', 'bond')),
+
+    quantity    NUMERIC(18, 6),     -- optional: number of shares/units
+    value_usd   NUMERIC(18, 2),     -- optional: position value in USD
+
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT uq_portfolio_user_ticker UNIQUE (user_id, ticker)
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_portfolios_user_id
+    ON user_portfolios (user_id);
+
+COMMENT ON TABLE  user_portfolios           IS 'User investment holdings for opt-in portfolio impact analysis.';
+COMMENT ON COLUMN user_portfolios.ticker    IS 'Yahoo Finance ticker symbol — uppercase, immutable after creation.';
+COMMENT ON COLUMN user_portfolios.asset_type IS 'One of: stock, etf, crypto, commodity, bond.';
+
+
+-- ============================================================================
 -- TABLE: password_reset_tokens
 -- One-time tokens for the forgot-password flow. Expires after 1 hour.
 -- Any unused token for a user is replaced when a new request is made.
