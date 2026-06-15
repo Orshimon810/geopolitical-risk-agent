@@ -120,6 +120,7 @@ def run_geopolitical_agent_task(
 
     _patch_task_state(r, task_id, {"status": "PROCESSING"})
     logger.info("Task %s PROCESSING | user=%s | query=%r", task_id, user_id, query[:120])
+    logger.info("Task %s portfolio_arg=%s (%d holdings)", task_id, "SET" if portfolio else "NONE", len(portfolio) if portfolio else 0)
 
     try:
         from georisk_agent.agents.nodes_planner import planner_node
@@ -180,6 +181,11 @@ def resume_geopolitical_agent_task(self, original_task_id: str, user_id: str) ->
     query         = task_state.get("query", "")
     approved_plan = task_state.get("approved_plan") or task_state.get("sub_questions", [])
     portfolio     = task_state.get("portfolio")  # None when not a portfolio analysis run
+    logger.info("Task %s redis_keys=%s | portfolio_in_redis=%s (%d holdings)",
+                original_task_id,
+                sorted(task_state.keys()),
+                "SET" if portfolio else "NONE",
+                len(portfolio) if portfolio else 0)
 
     try:
         from georisk_agent.agents.graph import build_resume_graph
