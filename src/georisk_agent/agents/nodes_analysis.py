@@ -5,7 +5,7 @@ from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
 from georisk_agent.app.config import settings
-from georisk_agent.app.types import AgentState, PortfolioHolding
+from georisk_agent.app.types import DynamicAgentState, PortfolioHolding
 
 logger = logging.getLogger(__name__)
 
@@ -299,7 +299,7 @@ def _run_portfolio_analysis(
 # Analysis Node
 # -------------------------
 
-def analysis_node(state: AgentState) -> AgentState:
+def analysis_node(state: DynamicAgentState) -> DynamicAgentState:
     """
     Evidence-grounded, scenario-aware market impact analysis.
 
