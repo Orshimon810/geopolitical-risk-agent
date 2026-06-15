@@ -35,7 +35,10 @@ export default function AnalysisPage() {
 
   useEffect(() => {
     api.getPortfolio()
-      .then((holdings) => setPortfolioCount(holdings.length))
+      .then((holdings) => {
+        setPortfolioCount(holdings.length);
+        if (holdings.length > 0) setIncludePortfolio(true);
+      })
       .catch(() => setPortfolioCount(0));
   }, []);
 
@@ -86,6 +89,7 @@ export default function AnalysisPage() {
     setSubQuestions([]);
 
     try {
+      console.log('[portfolio] Submitting analysis:', { query: query.trim().slice(0, 60), include_portfolio: includePortfolio });
       const { task_id } = await api.analyzeQuery(query.trim(), includePortfolio);
       setTaskId(task_id);
       startPolling(task_id);
