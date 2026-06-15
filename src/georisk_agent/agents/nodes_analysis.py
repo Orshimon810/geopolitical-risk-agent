@@ -1,5 +1,5 @@
 import logging
-from typing import List, Dict, Any, Literal, Optional
+from typing import List, Dict, Any, Literal
 
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 # -------------------------
-# Structured output schema
+# Structured output schemas
 # -------------------------
 
 class PortfolioHoldingImpact(BaseModel):
@@ -27,6 +27,13 @@ class PortfolioHoldingImpact(BaseModel):
     confidence: Literal["Low", "Medium", "High"]
     reasoning: str = Field(
         description="Brief causal chain connecting the geopolitical event to this specific holding."
+    )
+
+
+class PortfolioAnalysisOutput(BaseModel):
+    """Dedicated schema for the portfolio-only LLM call."""
+    impacts: list[PortfolioHoldingImpact] = Field(
+        description="One entry per holding listed in the prompt, in the same order."
     )
 
 
@@ -70,15 +77,6 @@ class AnalysisOutput(BaseModel):
             "Never use generic placeholders like 'Market analysis reports' or 'Bloomberg; Datastream'."
         )
     )
-    portfolio_impacts: Optional[list[PortfolioHoldingImpact]] = Field(
-        default=None,
-        description=(
-            "Per-holding impact assessment. "
-            "If a 'Portfolio positions to assess' block appears in the prompt you MUST populate this list "
-            "with one entry per holding — never leave it null in that case. "
-            "Leave null only when no portfolio block is present."
-        )
-    )
 
 
 # -------------------------
@@ -91,7 +89,8 @@ _llm = ChatOpenAI(
     temperature=0.2,
 )
 
-structured_llm = _llm.with_structured_output(AnalysisOutput)
+structured_llm         = _llm.with_structured_output(AnalysisOutput)
+_portfolio_llm         = _llm.with_structured_output(PortfolioAnalysisOutput)
 
 
 # -------------------------
@@ -150,59 +149,96 @@ def _format_evidence(
     return "\n".join(lines)
 
 
+def _price_str(ticker: str, portfolio_prices: dict[str, Any]) -> str:
+    info = portfolio_prices.get(ticker, {})
+    if info.get("status") == "ok":
+        return f"price ${info['price']:.2f} ({info['change_1d_pct']:+.1f}% today)"
+    return "price unavailable"
+
+
 # -------------------------
-# Portfolio prompt helpers
+# Dedicated portfolio call
 # -------------------------
 
-def _format_portfolio_block(
-    holdings: list[PortfolioHolding],
+def _run_portfolio_analysis(
+    portfolio: list[PortfolioHolding],
     portfolio_prices: dict[str, Any],
-) -> str:
-    lines = [
-        "=== PORTFOLIO ANALYSIS REQUIRED ===",
-        f"Analyze ONLY the {len(holdings)} holdings listed below.",
-        "Do NOT substitute, add, or remove any tickers.",
-        "",
-    ]
+    query: str,
+    market_impacts: list[str],
+    signals_block: str,
+) -> list[PortfolioHoldingImpact]:
+    """
+    Separate, focused LLM call that produces per-holding impact assessments.
+    Isolated from the main analysis call so the model has exactly one task.
+    """
+    holdings_lines = "\n".join(
+        f'{i + 1}. ticker="{h.get("ticker", "")}" | name="{h.get("name", "")}" '
+        f'| type={h.get("asset_type", "stock")} | {_price_str(h.get("ticker", ""), portfolio_prices)}'
+        for i, h in enumerate(portfolio)
+    )
 
-    ticker_constraints = []
-    for i, h in enumerate(holdings, 1):
-        ticker = h.get("ticker", "")
-        name = h.get("name", "")
-        asset_type = h.get("asset_type", "")
-        qty = h.get("quantity")
-        val = h.get("value_usd")
+    impacts_lines = "\n".join(f"- {m}" for m in market_impacts[:4])
+    signals_section = ("Market signals:\n" + signals_block) if signals_block else ""
 
-        price_info = portfolio_prices.get(ticker, {})
-        if price_info.get("status") == "ok":
-            price_str = f"${price_info['price']:.2f} ({price_info['change_1d_pct']:+.1f}% today)"
+    prompt = f"""You are a geopolitical risk analyst assessing the impact of a specific situation on a user's personal investment holdings.
+
+Geopolitical context:
+{query}
+
+Key market impacts already identified by the main analysis:
+{impacts_lines}
+
+{signals_section}
+
+Assess EXACTLY these {len(portfolio)} investment holdings in the order listed:
+{holdings_lines}
+
+Rules:
+- Return exactly {len(portfolio)} entries in the `impacts` list.
+- Use the EXACT ticker and name values shown above — do not rename, substitute, or add holdings.
+- For each entry: verdict (Bullish/Bearish/Neutral), short_term_impact, long_term_impact, confidence (Low/Medium/High), reasoning specific to that holding.
+"""
+
+    try:
+        output: PortfolioAnalysisOutput = _portfolio_llm.invoke(prompt)
+        impacts = output.impacts
+    except Exception as exc:
+        logger.error("portfolio analysis LLM call failed: %s", exc, exc_info=True)
+        impacts = []
+
+    result: list[PortfolioHoldingImpact] = []
+    for i, h in enumerate(portfolio):
+        correct_ticker = h.get("ticker", "")
+        correct_name   = h.get("name", correct_ticker)
+
+        if i < len(impacts):
+            raw = impacts[i]
+            if raw.ticker.upper() != correct_ticker.upper():
+                logger.warning(
+                    "portfolio analysis: ticker mismatch at position %d — expected %s, got %s; correcting",
+                    i, correct_ticker, raw.ticker,
+                )
+            result.append(PortfolioHoldingImpact(
+                ticker=correct_ticker,
+                name=correct_name,
+                verdict=raw.verdict,
+                short_term_impact=raw.short_term_impact,
+                long_term_impact=raw.long_term_impact,
+                confidence=raw.confidence,
+                reasoning=raw.reasoning,
+            ))
         else:
-            price_str = "price unavailable"
+            result.append(PortfolioHoldingImpact(
+                ticker=correct_ticker,
+                name=correct_name,
+                verdict="Neutral",
+                short_term_impact="Unable to assess impact for this holding.",
+                long_term_impact="Unable to assess impact for this holding.",
+                confidence="Low",
+                reasoning="Entry was missing from portfolio analysis response.",
+            ))
 
-        meta_parts = []
-        if qty is not None:
-            meta_parts.append(f"qty: {qty}")
-        if val is not None:
-            meta_parts.append(f"value: ${val:,.2f}")
-        meta_str = f" | {', '.join(meta_parts)}" if meta_parts else ""
-
-        lines.append(f"{i}. Ticker: {ticker} | Name: {name} | Type: {asset_type}{meta_str} | Price: {price_str}")
-        ticker_constraints.append(f"  - Entry {i}: ticker MUST be \"{ticker}\", name MUST be \"{name}\"")
-
-    lines += [
-        "",
-        f"For portfolio_impacts, provide EXACTLY {len(holdings)} entries in this order:",
-        *ticker_constraints,
-        "",
-        "For each entry also provide:",
-        "  - verdict: Bullish / Bearish / Neutral",
-        "  - short_term_impact: effect over days/weeks (specific to THIS holding)",
-        "  - long_term_impact: effect over months/quarters (specific to THIS holding)",
-        "  - confidence: Low / Medium / High",
-        "  - reasoning: causal chain linking the geopolitical event to THIS specific holding",
-        "=== END PORTFOLIO SECTION ===",
-    ]
-    return "\n".join(lines)
+    return result
 
 
 # -------------------------
@@ -212,7 +248,7 @@ def _format_portfolio_block(
 def analysis_node(state: AgentState) -> AgentState:
     """
     Evidence-grounded, scenario-aware market impact analysis.
-    When state["portfolio"] is set, also produces per-holding impact assessments.
+    When state["portfolio"] is set, runs a second focused LLM call for per-holding impacts.
     """
 
     query = state.get("query", "")
@@ -260,17 +296,6 @@ def analysis_node(state: AgentState) -> AgentState:
         if n_questions > 0 else ""
     )
 
-    portfolio_block = ""
-    if portfolio:
-        portfolio_prices = signals.get("portfolio_prices", {})
-        ticker_list = ", ".join(h.get("ticker", "") for h in portfolio)
-        portfolio_block = (
-            "\n\n" + _format_portfolio_block(portfolio, portfolio_prices) +
-            f"\n\nCRITICAL: populate portfolio_impacts with EXACTLY {len(portfolio)} entries "
-            f"using ONLY these tickers in this order: {ticker_list}. "
-            f"Do NOT use any other ticker symbols."
-        )
-
     prompt = f"""
 You are a senior geopolitical risk analyst advising institutional investors.
 
@@ -288,7 +313,6 @@ Evidence:
 {coverage_line}
 
 {signals_block}
-{portfolio_block}
 
 Structural rules:
 - Do NOT introduce risks inside market_impacts.
@@ -323,52 +347,32 @@ Source citation discipline:
 
     output: AnalysisOutput = structured_llm.invoke(prompt)
 
-    if portfolio and not output.portfolio_impacts:
-        logger.warning(
-            "analysis_node: portfolio provided (%d holdings) but LLM returned null portfolio_impacts",
-            len(portfolio),
-        )
-    elif portfolio and output.portfolio_impacts:
-        expected = [h.get("ticker", "").upper() for h in portfolio]
-        actual   = [p.ticker.upper() for p in output.portfolio_impacts]
-        if actual != expected:
-            logger.warning(
-                "analysis_node: portfolio_impacts ticker mismatch — expected %s, got %s; correcting by position",
-                expected, actual,
-            )
-            corrected: list[PortfolioHoldingImpact] = []
-            for i, impact in enumerate(output.portfolio_impacts[: len(portfolio)]):
-                h = portfolio[i]
-                corrected.append(PortfolioHoldingImpact(
-                    ticker=h.get("ticker", impact.ticker),
-                    name=h.get("name", impact.name),
-                    verdict=impact.verdict,
-                    short_term_impact=impact.short_term_impact,
-                    long_term_impact=impact.long_term_impact,
-                    confidence=impact.confidence,
-                    reasoning=impact.reasoning,
-                ))
-            # Fill any missing entries for holdings beyond what the LLM generated
-            for i in range(len(corrected), len(portfolio)):
-                h = portfolio[i]
-                corrected.append(PortfolioHoldingImpact(
-                    ticker=h.get("ticker", ""),
-                    name=h.get("name", ""),
-                    verdict="Neutral",
-                    short_term_impact="Insufficient LLM output to assess short-term impact.",
-                    long_term_impact="Insufficient LLM output to assess long-term impact.",
-                    confidence="Low",
-                    reasoning="Entry was missing from LLM response; placeholder inserted.",
-                ))
-            output.portfolio_impacts = corrected
-
-    market_impacts = output.market_impacts
-    risks = output.risks
-    scenarios = output.scenarios
+    market_impacts    = output.market_impacts
+    risks             = output.risks
+    scenarios         = output.scenarios
     investor_takeaway = output.investor_takeaway
-    confidence = output.confidence
-    sources = output.sources
-    portfolio_impacts = [p.model_dump() for p in output.portfolio_impacts] if output.portfolio_impacts else None
+    confidence        = output.confidence
+    sources           = output.sources
+
+    # -------------------------
+    # Dedicated portfolio pass
+    # -------------------------
+
+    portfolio_impacts: list[dict] | None = None
+    if portfolio:
+        portfolio_prices = signals.get("portfolio_prices", {})
+        holding_impacts = _run_portfolio_analysis(
+            portfolio=portfolio,
+            portfolio_prices=portfolio_prices,
+            query=query,
+            market_impacts=market_impacts,
+            signals_block=signals_block,
+        )
+        portfolio_impacts = [p.model_dump() for p in holding_impacts]
+        logger.info(
+            "analysis_node: portfolio analysis complete — %d/%d holdings assessed",
+            len(portfolio_impacts), len(portfolio),
+        )
 
     # -------------------------
     # Defensive fallbacks
@@ -401,16 +405,16 @@ Source citation discipline:
 
     return {
         **state,
-        "market_impacts": market_impacts[:6],
-        "risks": risks[:4],
-        "scenarios": scenarios[:2],
+        "market_impacts":    market_impacts[:6],
+        "risks":             risks[:4],
+        "scenarios":         scenarios[:2],
         "investor_takeaway": investor_takeaway[:1],
-        "confidence": confidence,
-        "sources": sources,
+        "confidence":        confidence,
+        "sources":           sources,
         "portfolio_impacts": portfolio_impacts,
         "debug": {
             **(state.get("debug") or {}),
-            "analysis_reasoning": output.reasoning,
-            "analysis_structured_output": output.model_dump(),
+            "analysis_reasoning":          output.reasoning,
+            "analysis_structured_output":  output.model_dump(),
         },
     }
