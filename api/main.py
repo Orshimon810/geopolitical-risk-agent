@@ -17,7 +17,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.core.redis_client import close_redis, get_redis
-from api.routers import agent, auth
+from api.routers import agent, auth, portfolio
 from georisk_agent.app.config import settings
 from georisk_agent.db.client import close_engine, get_engine
 
@@ -67,12 +67,13 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
 app.include_router(auth.router)
 app.include_router(agent.router)
+app.include_router(portfolio.router)
 
 
 @app.get("/health", tags=["Health"], summary="Liveness probe")

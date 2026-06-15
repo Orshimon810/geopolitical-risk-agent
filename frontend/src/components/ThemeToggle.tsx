@@ -4,14 +4,16 @@ import { useEffect, useState } from "react";
 import { Sun, Moon } from "lucide-react";
 
 export function ThemeToggle() {
-  const [isDark, setIsDark] = useState(true);
+  // Lazy initializer reads localStorage once on the client; SSR defaults to dark
+  const [isDark, setIsDark] = useState(() => {
+    if (typeof window === "undefined") return true;
+    return localStorage.getItem("georisk-theme") !== "light";
+  });
 
+  // Sync DOM class whenever isDark changes — no setState inside this effect
   useEffect(() => {
-    const stored = localStorage.getItem("georisk-theme");
-    const dark = stored !== "light";
-    setIsDark(dark);
-    document.documentElement.classList.toggle("light", !dark);
-  }, []);
+    document.documentElement.classList.toggle("light", !isDark);
+  }, [isDark]);
 
   const toggle = () => {
     const nowDark = !isDark;

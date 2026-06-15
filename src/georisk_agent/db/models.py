@@ -22,8 +22,10 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -60,10 +62,6 @@ class User(Base):
     full_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     tier: Mapped[str] = mapped_column(String(20), nullable=False, default="free")
-    daily_query_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    daily_reset_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, default=_utcnow
-    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
     )
@@ -106,9 +104,8 @@ class GeopoliticalEmbedding(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-    # Stable deduplication key — set to the original Chroma doc ID during migration,
-    # or to sha256(text) for new ingestions. ON CONFLICT on this column enables
-    # idempotent re-ingestion.
+    # Stable deduplication key — sha256(text) for new ingestions.
+    # ON CONFLICT on this column enables idempotent re-ingestion.
     chunk_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
     source: Mapped[str] = mapped_column(Text, nullable=False, index=True)
     text: Mapped[str] = mapped_column(Text, nullable=False)
@@ -176,6 +173,79 @@ class AnalysisHistory(Base):
             f"<AnalysisHistory id={self.id} confidence={self.confidence!r} "
             f"user_id={self.user_id}>"
         )
+
+
+# =============================================================================
+# Ephemeral News Embeddings
+# =============================================================================
+
+class EphemeralNewsEmbedding(Base):
+    __tablename__ = "ephemeral_embeddings"
+    __table_args__ = (
+        Index(
+            "idx_ephemeral_hnsw",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_with={"m": 16, "ef_construction": 64},
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+        Index("idx_ephemeral_expires", "expires_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    # sha256(url) — dedup key so re-ingesting the same article URL is idempotent
+    chunk_id: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    source: Mapped[str] = mapped_column(Text, nullable=False, index=True)  # news outlet name
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)  # title + description/summary
+    embedding: Mapped[list[float]] = mapped_column(Vector(1536), nullable=False)
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ingested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+    def __repr__(self) -> str:
+        return f"<EphemeralNewsEmbedding source={self.source!r} title={self.title[:40]!r}>"
+
+
+# =============================================================================
+# User Portfolio Holdings
+# =============================================================================
+
+class UserPortfolio(Base):
+    __tablename__ = "user_portfolios"
+    __table_args__ = (
+        CheckConstraint(
+            "asset_type IN ('stock', 'etf', 'crypto', 'commodity', 'bond')",
+            name="chk_portfolio_asset_type",
+        ),
+        UniqueConstraint("user_id", "ticker", name="uq_portfolio_user_ticker"),
+        Index("idx_user_portfolios_user_id", "user_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    ticker: Mapped[str] = mapped_column(String(20), nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    asset_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    quantity: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+    value_usd: Mapped[float | None] = mapped_column(Numeric(18, 2), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+    def __repr__(self) -> str:
+        return f"<UserPortfolio user_id={self.user_id} ticker={self.ticker!r}>"
 
 
 # =============================================================================

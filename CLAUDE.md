@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A geopolitical risk analysis agent built with LangGraph. It decomposes user queries into sub-questions, retrieves evidence from a pgvector RAG corpus hosted on Neon (PostgreSQL), fetches macroeconomic signals from the World Bank API, and synthesizes structured investment-oriented analysis via LLM.
 
 The project has two layers:
-- **`src/georisk_agent/`** — the core agent library (LangGraph pipeline, RAG, DB)
+- **`src/georisk_agent/`** — the core agent library (LangGraph pipeline, RAG, DB, news)
 - **`api/`** — async FastAPI REST API with JWT auth, Redis rate limiting, query caching, and Celery task queue
 
 ## Commands
@@ -32,6 +32,11 @@ cd frontend && npm install && npm run dev
 # --pool=solo is required on Windows (prefork pool breaks with heavy imports like LangGraph/OpenAI)
 celery -A api.worker.celery_app worker --loglevel=info --pool=solo
 
+# Run Celery beat scheduler (ephemeral news polling — separate terminal or combined with worker in dev)
+celery -A api.worker.celery_app beat --loglevel=info
+# Dev shortcut (worker + beat combined, Windows only):
+celery -A api.worker.celery_app worker --beat --loglevel=info --pool=solo
+
 # Start Redis via Docker (required for API + Celery)
 docker run -d --name redis-georisk -p 6379:6379 --restart unless-stopped redis:7-alpine
 
@@ -48,7 +53,7 @@ python evaluation/run_eval.py
 pytest tests/ -v
 
 # Run a single test file
-pytest tests/test_signals.py -v
+pytest tests/test_reviewer.py -v
 
 # Frontend lint and build check
 cd frontend && npm run lint
@@ -72,44 +77,66 @@ alembic current               # show current revision
 
 ### LangGraph Pipeline (`src/georisk_agent/`)
 
-A **linear LangGraph state machine** (`agents/graph.py`) with four nodes executed sequentially:
+Three graph factories are exported from `agents/graph.py`:
+
+- **`build_full_graph()`** — planner → rag_research → signals → analysis → reviewer → (conditional) → rag_research (retry) or final_output. Used by scripts and evaluation.
+- **`build_resume_graph()`** — starts at rag_research; used by Task B after HITL approval so the planner is skipped and the approved plan is injected via initial state.
+- **`build_legacy_graph()`** — alias for `build_full_graph()`.
+
+**Nodes:**
 
 1. **Planner** (`nodes_planner.py`) — LLM decomposes query into 4-6 sub-questions (temperature=0.2)
-2. **RAG Research** (`nodes_rag_research.py`) — Retrieves k=3 chunks per sub-question from Neon (pgvector) via `semantic_search()`, deduplicates across the full run by `(source, text)` tuple
+2. **RAG Research** (`nodes_rag_research.py`) — Retrieves k=3 chunks per sub-question from Neon (pgvector) via `semantic_search()`, deduplicates across the run by `(source, text)` tuple. On retry cycles, uses `rewritten_queries` instead of the original plan.
 3. **External Signals** (`nodes_signals.py`) — Extracts countries via keyword matching against a 43-country dict plus region aliases (Middle East, Gulf, OPEC, Eastern Europe, etc.), then fetches: (a) World Bank indicators — Trade % of GDP (all detected countries) and Oil Rents % of GDP (oil-producing countries only); (b) live Yahoo Finance market prices — always VIX, Brent crude, Gold, DXY, plus query-specific tickers (e.g. FXI/TSM for China-Taiwan, NG=F for oil/Russia/Ukraine, EEM for EM, FEZ for Europe)
-4. **Analysis** (`nodes_analysis.py`) — LLM synthesizes plan + evidence + signals into an `AnalysisOutput` Pydantic model via LangChain `.with_structured_output()`, guaranteeing seven typed fields: `reasoning` (chain-of-thought scratchpad, not shown to users — stored in `debug.analysis_reasoning`), `market_impacts`, `risks`, `scenarios`, `investor_takeaway`, `confidence` (Literal["Low","Medium","High"]), `sources`
+4. **Analysis** (`nodes_analysis.py`) — LLM synthesizes plan + evidence + signals into an `AnalysisOutput` Pydantic model via LangChain `.with_structured_output()`, guaranteeing seven typed fields: `reasoning` (chain-of-thought scratchpad, stored in `debug.analysis_reasoning`), `market_impacts`, `risks`, `scenarios`, `investor_takeaway`, `confidence` (Literal["Low","Medium","High"]), `sources`
+5. **Reviewer** (`nodes_reviewer.py`) — Automated quality gate. Runs two checks: (A) deterministic pre-check for thin evidence or High confidence on sparse retrieval; (B) LLM contradiction scan between historical RAG and live market signals. Writes `reviewer_verdict` ("RETRY" or "PASS") and calibrates confidence downward when source quality doesn't support the LLM's self-reported level. On RETRY, writes `rewritten_queries` (more targeted sub-questions) and routes back to rag_research. Max retries controlled by `MAX_RETRIES` env var (default 1).
+6. **final_output** — Strips the transient `reviewer_verdict` field before the graph exits.
 
-All nodes share an `AgentState` TypedDict (`app/types.py`) that flows through the graph. Each node is a pure function mapping `AgentState → AgentState`.
+All nodes share `DynamicAgentState` (a TypedDict in `app/types.py`) as the pipeline state. `AgentState` is kept as a backward-compatible alias. Key state fields added by the dynamic pipeline: `source_quality` (`SourceQuality` TypedDict with total_chunks, live_chunks, hist_chunks, sub_questions_answered, avg_cosine_distance, thin_evidence), `retry_count`, `max_retries`, `rewritten_queries`, `review_log`, `data_contradictions`, `reviewer_verdict`, `hitl_status`, `user_approved_plan`.
+
+### Ephemeral News Cache (`src/georisk_agent/news/`)
+
+A background news polling system that keeps the RAG corpus fresh with recent geopolitical events:
+
+- **`news/fetcher.py`** — Fetches from NewsAPI (`newsapi.org`) or Finnhub (`finnhub.io`) (selected via `NEWS_PROVIDER`). NewsAPI uses 6 fixed geopolitical/financial query terms; Finnhub uses the general news category. Both normalize to `{title, description, url, published_at, source}`.
+- **`news/ingestor.py`** — Embeds each article (title + description) via OpenAI and upserts into the `ephemeral_embeddings` table with an `expires_at` timestamp (`EPHEMERAL_TTL_HOURS`, default 48h). Deduplicates by SHA-256(url).
+- **Celery beat tasks** (`api/worker/news_tasks.py`):
+  - `poll_and_ingest_news_task` — runs every 4 hours; fetches + embeds new articles
+  - `flush_expired_ephemeral_task` — runs daily at 03:30 UTC; deletes rows where `expires_at <= NOW()`
+
+These tasks require the Celery beat scheduler alongside the worker. If no news API key is configured, ingest is skipped silently.
 
 ### FastAPI Backend (`api/`)
 
 A fully async REST API that wraps the LangGraph pipeline with authentication and async job dispatch:
 
 ```
-POST /auth/register          → create user (bcrypt-hashed password)
-POST /auth/login             → JWT access token + httpOnly refresh cookie
-POST /auth/refresh           → silent token rotation (reads georisk_refresh cookie)
-POST /auth/logout            → revoke refresh token, clear cookie
-POST /auth/forgot-password   → send reset link via Resend API (logs in dev mode)
-POST /auth/reset-password    → consume token, set new password
-POST /agent/analyze          → 202 Accepted + task_id (dispatches Celery task)
-GET  /agent/tasks/{task_id}  → polls task state from Redis
-GET  /agent/history          → paginated analysis history for the authenticated user
-DELETE /agent/history/{id}   → delete a single history entry
-GET  /health                 → liveness probe
+POST /auth/register                      → create user (bcrypt-hashed password)
+POST /auth/login                         → JWT access token + httpOnly refresh cookie
+POST /auth/refresh                       → silent token rotation (reads georisk_refresh cookie)
+POST /auth/logout                        → revoke refresh token, clear cookie
+POST /auth/forgot-password               → send reset link via Resend API (logs in dev mode)
+POST /auth/reset-password                → consume token, set new password
+POST /agent/analyze                      → 202 Accepted + task_id (dispatches Celery Task A)
+GET  /agent/tasks/{task_id}              → polls task state from Redis; auto-approves on HITL timeout
+POST /agent/tasks/{task_id}/approve-plan → HITL: inject user-edited sub-questions, dispatch Task B
+GET  /agent/history                      → paginated analysis history for the authenticated user
+DELETE /agent/history/{id}               → delete a single history entry
+GET  /health                             → liveness probe
 ```
 
-**Request lifecycle:**
+**HITL request lifecycle:**
 1. Client authenticates via `/auth/login` → receives JWT + httpOnly refresh cookie
-2. Client calls `POST /agent/analyze` with `Authorization: Bearer <token>`
+2. Client calls `POST /agent/analyze` → query cache checked first (SHA-256 key, 2h TTL); on hit, returns synthetic SUCCESS
 3. `check_rate_limit` dependency validates JWT + enforces per-user hourly quota via Redis INCR
-4. Query cache checked first — SHA-256(query) key in Redis with 2-hour TTL; hit returns synthetic SUCCESS state (no Celery dispatch)
-5. A UUID4 `task_id` is written to Redis as `PENDING` before Celery dispatch (prevents race condition)
-6. `run_geopolitical_agent_task.apply_async()` dispatches to the Celery worker
-7. The endpoint returns `202` with `task_id` immediately
-8. The Celery worker runs `build_graph().invoke({"query": query})`, writing `PROCESSING → SUCCESS/FAILED` to Redis
-9. On SUCCESS, the worker persists the result to `analysis_history` via a dedicated thread with `asyncio.run()`
-10. Client polls `GET /agent/tasks/{task_id}` until `status == "SUCCESS"`
+4. A UUID4 `task_id` is written to Redis as `PENDING`; **Task A** (`run_geopolitical_agent_task`) is dispatched
+5. Task A runs only the **planner node** and writes `WAITING_FOR_INPUT` + generated sub-questions to Redis — no checkpointer needed
+6. Client polls `GET /tasks/{task_id}` and sees `WAITING_FOR_INPUT` with `sub_questions`
+7. Client calls `POST /tasks/{task_id}/approve-plan` with approved (or edited) sub-questions
+8. The router writes `approved_plan` to Redis task state and dispatches **Task B** (`resume_geopolitical_agent_task`)
+9. Task B calls `build_resume_graph().invoke({..., "user_approved_plan": approved_plan})` — runs rag_research through final_output
+10. Task B writes `SUCCESS/FAILED` to Redis and persists the result to `analysis_history`
+11. If the client never calls approve-plan, `GET /tasks/{task_id}` auto-approves after `HITL_TIMEOUT_MINUTES` (default 10)
 
 **Auth — rate limiting details:**
 - Per-user analysis quota: `RATE_LIMIT_PER_HOUR` via Redis INCR (key: `ratelimit:{user_id}:{hour}`, TTL 3600s)
@@ -127,18 +154,22 @@ GET  /health                 → liveness probe
 - `src/app/(dashboard)/` — authenticated layout with Sidebar + Navbar; analysis and history pages
 - `src/lib/api.ts` — typed API client; automatic 401 → silent refresh → retry → `/login?reason=session_expired` redirect on failure
 - `src/context/AuthContext.tsx` — auth state (login/logout/register) with localStorage JWT persistence
-- `src/components/AgentStepper.tsx` — 4-step progress indicator mapped to Celery task states
+- `src/components/AgentStepper.tsx` — progress indicator mapped to Celery task states (including WAITING_FOR_INPUT)
 - `src/components/ResultsDisplay.tsx` — renders structured analysis output with markdown and market signals
 
 ## Key Files
 
 ### Core Agent Library
 - `src/georisk_agent/app/config.py` — Pydantic `Settings` reading from `.env` (single source of truth for all config)
-- `src/georisk_agent/app/types.py` — `AgentState` TypedDict and `Evidence` TypedDict
-- `src/georisk_agent/rag/retriever.py` — `retrieve(query, k=5)` — embeds query with OpenAI, calls `semantic_search()` against Neon pgvector
+- `src/georisk_agent/app/types.py` — `DynamicAgentState` TypedDict, `SourceQuality`, `ReviewEntry`, `Evidence`; `AgentState` is a backward-compatible alias
+- `src/georisk_agent/agents/graph.py` — `build_full_graph()`, `build_resume_graph()`, `build_legacy_graph()`; `should_continue()` conditional edge for reviewer loop
+- `src/georisk_agent/agents/nodes_reviewer.py` — `reviewer_node()`, `_calibrate_confidence()`, `ReviewerOutput` Pydantic model
+- `src/georisk_agent/rag/retriever.py` — `retrieve(query, k=5)` — embeds query with OpenAI, calls `semantic_search()` against Neon pgvector; hosts the shared `georisk-db-loop` background thread
 - `src/georisk_agent/db/client.py` — async SQLAlchemy engine + connection pool (asyncpg driver, SSL, pool_pre_ping for Neon idle timeouts)
-- `src/georisk_agent/db/dal.py` — all DB operations: user auth, embedding upsert/search, analysis history
-- `src/georisk_agent/db/models.py` — SQLAlchemy 2.0 ORM models: `User`, `GeopoliticalEmbedding`, `AnalysisHistory`
+- `src/georisk_agent/db/dal.py` — all DB operations: user auth, embedding upsert/search, ephemeral embedding upsert/flush, analysis history
+- `src/georisk_agent/db/models.py` — SQLAlchemy 2.0 ORM models: `User`, `GeopoliticalEmbedding`, `AnalysisHistory`, `EphemeralEmbedding`
+- `src/georisk_agent/news/fetcher.py` — `fetch_newsapi()`, `fetch_finnhub()`, `fetch_news()` dispatcher
+- `src/georisk_agent/news/ingestor.py` — `ingest_latest_news()` — embeds and upserts articles into `ephemeral_embeddings`
 - `db/schema.sql` — canonical PostgreSQL schema (run once against Neon)
 
 ### FastAPI Layer
@@ -146,13 +177,13 @@ GET  /health                 → liveness probe
 - `api/dependencies.py` — `db_session`, `get_current_user`, `check_rate_limit` — compose into router dependencies
 - `api/core/security.py` — `create_access_token` / `decode_access_token` (HS256 JWT via python-jose)
 - `api/core/redis_client.py` — async Redis singleton (`redis.asyncio`)
-- `api/core/query_cache.py` — `get_cached_result()` / `set_cached_result()` — Redis cache keyed by SHA-256(query)
-- `api/core/email.py` — `send_password_reset_email()` via Resend API; falls back to stdout logging when `RESEND_API_KEY` is unset
+- `api/core/query_cache.py` — `get_cached_result()` / `set_cached_result()` / `set_cached_result_sync()` — Redis cache keyed by SHA-256(query)
 - `api/routers/auth.py` — all auth endpoints including refresh token rotation and password reset flow
-- `api/routers/agent.py` — `/agent/analyze` (202), `/agent/history`, `/agent/tasks/{task_id}`, and DELETE history
-- `api/worker/celery_app.py` — Celery instance; broker/backend configurable via env (Redis, RabbitMQ, SQS)
-- `api/worker/tasks.py` — `run_geopolitical_agent_task` — runs the LangGraph graph, writes state to Redis, persists result to DB
-- `api/schemas/` — Pydantic v2 request/response models for auth and agent endpoints
+- `api/routers/agent.py` — `/agent/analyze`, `/agent/tasks/{task_id}`, `/agent/tasks/{task_id}/approve-plan`, `/agent/history`, DELETE history
+- `api/worker/celery_app.py` — Celery instance + beat_schedule (news polling and flush tasks)
+- `api/worker/tasks.py` — Task A (`run_geopolitical_agent_task`) and Task B (`resume_geopolitical_agent_task`)
+- `api/worker/news_tasks.py` — `poll_and_ingest_news_task` (every 4h), `flush_expired_ephemeral_task` (daily 03:30 UTC)
+- `api/schemas/` — Pydantic v2 request/response models including `ApprovePlanRequest`, `TaskStatusResponse`
 
 ### Deployment
 - `Dockerfile.api` — single Dockerfile for both API and worker; `WORKER_MODE=1` env var switches the CMD to Celery
@@ -188,6 +219,12 @@ Set in `.env` (see `.env.example`):
 | `SMTP_FROM` | `onboarding@resend.dev` | No |
 | `FRONTEND_URL` | `http://localhost:3000` | No |
 | `QUERY_CACHE_TTL` | `7200` | No |
+| `MAX_RETRIES` | `1` | No |
+| `HITL_TIMEOUT_MINUTES` | `10` | No |
+| `NEWS_PROVIDER` | `newsapi` | No (`newsapi` or `finnhub`) |
+| `NEWSAPI_KEY` | — | No (skips news ingest when unset) |
+| `FINNHUB_API_KEY` | — | No (skips news ingest when unset) |
+| `EPHEMERAL_TTL_HOURS` | `48` | No |
 
 `DATABASE_URL` format for Neon: `postgresql+asyncpg://user:pass@ep-xxx.neon.tech/dbname?sslmode=require`
 
@@ -195,7 +232,7 @@ Redis uses three logical DB numbers: DB 0 for rate-limit keys, task state, refre
 
 Redis key layout:
 - `ratelimit:{user_id}:{hour}` — per-user hourly quota counter (TTL 3600s)
-- `task:{task_id}` — Celery task state JSON (TTL 24h)
+- `task:{task_id}` — Celery task state JSON (TTL 24h); transitions: PENDING → PROCESSING → WAITING_FOR_INPUT → PROCESSING → SUCCESS/FAILED
 - `refresh:{uuid}` → user_id — refresh token store (TTL = REFRESH_TOKEN_EXPIRE_DAYS)
 - `query:{sha256}` — cached analysis result (TTL = QUERY_CACHE_TTL)
 
@@ -210,6 +247,8 @@ Redis key layout:
 - Task state in Redis uses a read-modify-write pattern (not atomic) — safe because only the owning Celery task ever writes its own state key (`task:{task_id}`).
 - Refresh tokens use rotation on every use: old token deleted, new token issued. Cookie settings: `httpOnly=True`, `secure=is_prod`, `samesite="none"` (prod) / `"lax"` (dev).
 - Query cache is checked before Celery dispatch — on a hit, a synthetic SUCCESS state is written to Redis and returned immediately with no LLM call.
+- The Reviewer confidence calibration is one-directional: it can only downgrade confidence, never upgrade. The thresholds are: High → Medium if total_chunks < 5 or any sub-question unanswered; High/Medium → Low if total_chunks ≤ 2 or fewer than half of sub-questions answered.
+- HITL uses no external graph checkpointer — the plan is stored as plain JSON in the existing `task:{task_id}` Redis key. Task B reads `approved_plan` directly from that key and injects it into the resume graph's initial state.
 - `ChromaDB` and `CHROMA_DIR` are no longer used — fully replaced by Neon pgvector.
 - The Celery worker must use `--pool=solo` on Windows — the default prefork pool uses `spawn` which conflicts with heavy async imports (LangGraph, OpenAI). On Linux/macOS (including Docker), `prefork` works fine.
 - Password hashing uses `bcrypt` directly (not `passlib`) — `passlib` is incompatible with `bcrypt >= 4.0`.

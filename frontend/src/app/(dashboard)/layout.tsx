@@ -7,8 +7,9 @@ import { Navbar } from "@/components/Navbar";
 import { useAuth } from "@/context/AuthContext";
 
 const PAGE_TITLES: Record<string, string> = {
-  "/analysis": "New Analysis",
-  "/history": "Analysis History",
+  "/analysis":  "New Analysis",
+  "/portfolio": "My Portfolio",
+  "/history":   "Analysis History",
 };
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -24,9 +25,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     }
   }, [isAuthenticated, isLoading, router]);
 
-  // Close mobile sidebar on route change
+  // Close mobile sidebar on route change (setTimeout avoids synchronous setState in effect)
   useEffect(() => {
-    setMobileOpen(false);
+    const t = setTimeout(() => setMobileOpen(false), 0);
+    return () => clearTimeout(t);
   }, [pathname]);
 
   if (isLoading) {

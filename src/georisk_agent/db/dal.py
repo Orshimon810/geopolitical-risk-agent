@@ -24,7 +24,7 @@ from sqlalchemy import delete, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from georisk_agent.db.models import AnalysisHistory, GeopoliticalEmbedding, PasswordResetToken, User
+from georisk_agent.db.models import AnalysisHistory, EphemeralNewsEmbedding, GeopoliticalEmbedding, PasswordResetToken, User, UserPortfolio
 
 logger = logging.getLogger(__name__)
 
@@ -158,8 +158,8 @@ async def bulk_upsert_embeddings(
 
     Returns the total number of records processed.
 
-    Batch size of 64 matches the ChromaDB ingest batch size and keeps individual
-    PG statements under the ~32k parameter limit (64 records × ~25 params each).
+    Batch size of 64 keeps individual PG statements under the ~32k parameter limit
+    (64 records × ~25 params each).
     """
     total = 0
     for batch_start in range(0, len(records), batch_size):
@@ -282,6 +282,117 @@ async def semantic_search(
 
 
 # =============================================================================
+# Ephemeral news embeddings
+# =============================================================================
+
+async def upsert_ephemeral_embedding(
+    session: AsyncSession,
+    *,
+    chunk_id: str,
+    source: str,
+    url: str,
+    title: str,
+    text_content: str,
+    embedding: list[float],
+    published_at: datetime,
+    expires_at: datetime,
+) -> None:
+    """
+    Insert or update a single ephemeral news embedding.
+    ON CONFLICT on chunk_id (sha256 of URL) is idempotent — safe to re-ingest.
+    """
+    stmt = (
+        pg_insert(EphemeralNewsEmbedding)
+        .values(
+            chunk_id=chunk_id,
+            source=source,
+            url=url,
+            title=title,
+            text=text_content,
+            embedding=embedding,
+            published_at=published_at,
+            expires_at=expires_at,
+        )
+        .on_conflict_do_update(
+            index_elements=["chunk_id"],
+            set_={
+                "title": title,
+                "text": text_content,
+                "embedding": embedding,
+                "expires_at": expires_at,
+                "ingested_at": datetime.now(timezone.utc),
+            },
+        )
+    )
+    await session.execute(stmt)
+
+
+async def semantic_search_ephemeral(
+    session: AsyncSession,
+    query_embedding: list[float],
+    k: int = 2,
+    max_distance: float = 0.35,
+) -> list[dict[str, Any]]:
+    """
+    Retrieve the top-k live news chunks within the cosine distance threshold.
+
+    Only returns non-expired rows (expires_at > NOW()).
+    max_distance is a cosine distance ceiling — 0.35 ≈ similarity > 0.65,
+    ensuring only genuinely relevant recent news is returned.
+    """
+    vec_literal = "[" + ",".join(f"{v:.8f}" for v in query_embedding) + "]"
+    params: dict[str, Any] = {"vec": vec_literal, "k": k, "max_dist": max_distance}
+
+    sql = text("""
+        SELECT
+            chunk_id,
+            source,
+            url,
+            title,
+            text,
+            published_at,
+            1 - (embedding <=> CAST(:vec AS vector)) AS similarity
+        FROM
+            ephemeral_embeddings
+        WHERE
+            expires_at > NOW()
+            AND (embedding <=> CAST(:vec AS vector)) < :max_dist
+        ORDER BY
+            embedding <=> CAST(:vec AS vector)
+        LIMIT :k
+    """)
+
+    result = await session.execute(sql, params)
+    rows = result.mappings().all()
+
+    return [
+        {
+            "chunk_id": row["chunk_id"],
+            "source": row["source"],
+            "url": row["url"],
+            "title": row["title"],
+            "text": row["text"],
+            "published_at": row["published_at"],
+            "similarity": float(row["similarity"]),
+        }
+        for row in rows
+    ]
+
+
+async def flush_expired_ephemeral(session: AsyncSession) -> int:
+    """Delete all expired ephemeral news rows. Returns the number of deleted rows."""
+    result = await session.execute(
+        delete(EphemeralNewsEmbedding).where(
+            EphemeralNewsEmbedding.expires_at <= datetime.now(timezone.utc)
+        )
+    )
+    count = result.rowcount  # type: ignore[assignment]
+    if count:
+        logger.info("Flushed %d expired ephemeral news rows", count)
+    return count
+
+
+# =============================================================================
 # Analysis history
 # =============================================================================
 
@@ -385,6 +496,105 @@ async def delete_user_history(
         delete(AnalysisHistory).where(AnalysisHistory.user_id == user_id)
     )
     return result.rowcount  # type: ignore[return-value]
+
+
+# =============================================================================
+# Portfolio holdings
+# =============================================================================
+
+async def get_user_portfolio(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+) -> list[UserPortfolio]:
+    """Return all holdings for a user, ordered by creation date."""
+    result = await session.execute(
+        select(UserPortfolio)
+        .where(UserPortfolio.user_id == user_id)
+        .order_by(UserPortfolio.created_at.asc())
+    )
+    return list(result.scalars().all())
+
+
+async def count_holdings(session: AsyncSession, user_id: uuid.UUID) -> int:
+    """Return the number of holdings for a user."""
+    result = await session.execute(
+        select(UserPortfolio).where(UserPortfolio.user_id == user_id)
+    )
+    return len(result.scalars().all())
+
+
+async def add_holding(
+    session: AsyncSession,
+    *,
+    user_id: uuid.UUID,
+    ticker: str,
+    name: str,
+    asset_type: str,
+    quantity: float | None = None,
+    value_usd: float | None = None,
+) -> UserPortfolio:
+    """
+    Add a new holding to a user's portfolio.
+    Raises IntegrityError if the ticker already exists for this user.
+    """
+    holding = UserPortfolio(
+        user_id=user_id,
+        ticker=ticker.upper(),
+        name=name,
+        asset_type=asset_type,
+        quantity=quantity,
+        value_usd=value_usd,
+    )
+    session.add(holding)
+    await session.flush()
+    return holding
+
+
+async def update_holding(
+    session: AsyncSession,
+    holding_id: uuid.UUID,
+    user_id: uuid.UUID,
+    *,
+    name: str | None = None,
+    quantity: float | None | type(...) = ...,
+    value_usd: float | None | type(...) = ...,
+) -> UserPortfolio | None:
+    """
+    Update mutable fields of a holding. Returns None if not found or wrong owner.
+    Pass Ellipsis (...) to leave a field unchanged; pass None to clear it.
+    """
+    result = await session.execute(
+        select(UserPortfolio)
+        .where(UserPortfolio.id == holding_id)
+        .where(UserPortfolio.user_id == user_id)
+    )
+    holding = result.scalar_one_or_none()
+    if holding is None:
+        return None
+
+    if name is not None:
+        holding.name = name
+    if quantity is not ...:
+        holding.quantity = quantity  # type: ignore[assignment]
+    if value_usd is not ...:
+        holding.value_usd = value_usd  # type: ignore[assignment]
+
+    await session.flush()
+    return holding
+
+
+async def delete_holding(
+    session: AsyncSession,
+    holding_id: uuid.UUID,
+    user_id: uuid.UUID,
+) -> bool:
+    """Delete a holding by ID, enforcing ownership. Returns True if deleted."""
+    result = await session.execute(
+        delete(UserPortfolio)
+        .where(UserPortfolio.id == holding_id)
+        .where(UserPortfolio.user_id == user_id)
+    )
+    return result.rowcount > 0  # type: ignore[return-value]
 
 
 # =============================================================================

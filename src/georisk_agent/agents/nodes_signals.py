@@ -176,15 +176,56 @@ def fetch_oil_rents(country: str) -> Dict[str, Any]:
 # Signals Node
 # -------------------------
 
+def fetch_portfolio_prices(holdings: list[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Fetch current price and 1-day % change for each portfolio holding.
+    Errors are caught per-ticker and stored as {"status": "error"}.
+    Returns a dict keyed by ticker symbol.
+    """
+    if not holdings:
+        return {}
+
+    tickers: Dict[str, str] = {
+        h["ticker"]: h.get("name", h["ticker"])
+        for h in holdings
+        if h.get("ticker")
+    }
+
+    def _fetch_one(symbol: str, label: str):
+        try:
+            info = yf.Ticker(symbol).fast_info
+            price = info.last_price
+            prev = info.previous_close
+            change_pct = ((price - prev) / prev * 100) if prev else None
+            return symbol, {
+                "label": label,
+                "price": round(price, 2),
+                "change_1d_pct": round(change_pct, 2) if change_pct is not None else None,
+                "status": "ok",
+            }
+        except Exception as e:
+            return symbol, {"label": label, "status": "error", "error": str(e)}
+
+    results: Dict[str, Any] = {}
+    with ThreadPoolExecutor(max_workers=min(len(tickers), 8)) as executor:
+        futures = {executor.submit(_fetch_one, sym, lbl): sym for sym, lbl in tickers.items()}
+        for future in as_completed(futures):
+            symbol, result = future.result()
+            results[symbol] = result
+    return results
+
+
 def signals_node(state: AgentState) -> AgentState:
     """
     Context-aware External Signals Agent.
 
     Detects relevant countries, fetches World Bank macro indicators,
     and fetches live Yahoo Finance market prices (always core + query-specific).
+    When state["portfolio"] is set, also fetches prices for portfolio tickers.
     """
     query = state.get("query", "")
     plan = " ".join(state.get("plan", []))
+    portfolio = state.get("portfolio")
 
     combined_text = f"{query} {plan}"
     countries = extract_relevant_countries(combined_text)
@@ -208,6 +249,9 @@ def signals_node(state: AgentState) -> AgentState:
 
     tickers = build_tickers(countries)
     signals["market_data"] = fetch_market_snapshot(tickers)
+
+    if portfolio:
+        signals["portfolio_prices"] = fetch_portfolio_prices(portfolio)
 
     return {**state, "signals": signals}
 
