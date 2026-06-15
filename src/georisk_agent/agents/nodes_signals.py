@@ -229,7 +229,6 @@ def signals_node(state: DynamicAgentState) -> DynamicAgentState:
     query = state.get("query", "")
     plan = " ".join(state.get("plan", []))
     portfolio = state.get("portfolio")
-    logger.info("signals_node: portfolio=%s (%d holdings)", "SET" if portfolio else "NONE", len(portfolio) if portfolio else 0)
 
     combined_text = f"{query} {plan}"
     countries = extract_relevant_countries(combined_text)
