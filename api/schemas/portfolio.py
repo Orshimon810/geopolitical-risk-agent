@@ -5,6 +5,18 @@ from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
+class TickerSearchResult(BaseModel):
+    ticker: str
+    name: str
+    asset_type: Literal["stock", "etf", "crypto", "commodity", "bond"]
+
+
+class TickerQuoteResponse(BaseModel):
+    ticker: str
+    price: Optional[float]
+    currency: str
+
+
 class PortfolioHoldingCreate(BaseModel):
     ticker: str = Field(
         min_length=1,
