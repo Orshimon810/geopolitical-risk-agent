@@ -7,7 +7,7 @@ export interface User {
 }
 
 export type Confidence = "Low" | "Medium" | "High";
-export type TaskStatus = "PENDING" | "PROCESSING" | "SUCCESS" | "FAILED";
+export type TaskStatus = "PENDING" | "PROCESSING" | "WAITING_FOR_INPUT" | "SUCCESS" | "FAILED";
 
 export interface MarketDataEntry {
   label: string;
@@ -75,6 +75,7 @@ export interface TaskStatusResponse {
   status: TaskStatus;
   result: AnalysisResult | null;
   error: string | null;
+  sub_questions?: string[];
   created_at: string;
   completed_at: string | null;
 }
