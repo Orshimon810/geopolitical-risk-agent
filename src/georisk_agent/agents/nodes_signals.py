@@ -9,53 +9,47 @@ from georisk_agent.app.types import DynamicAgentState
 
 logger = logging.getLogger(__name__)
 
-COUNTRY_NAME_TO_ISO = {
-    # Major economies
-    "united states": "USA",
-    "us": "USA",
-    "usa": "USA",
-    "china": "CHN",
-    "germany": "DEU",
-    "russia": "RUS",
-    "india": "IND",
-    "japan": "JPN",
-    "south korea": "KOR",
-    "korea": "KOR",
-    "france": "FRA",
-    "united kingdom": "GBR",
-    "uk": "GBR",
-    "brazil": "BRA",
-    "canada": "CAN",
-    "australia": "AUS",
-    "italy": "ITA",
-    "mexico": "MEX",
-    "indonesia": "IDN",
-    "turkey": "TUR",
-    "turkiye": "TUR",
-    # Middle East
-    "saudi arabia": "SAU",
-    "iran": "IRN",
-    "iraq": "IRQ",
-    "israel": "ISR",
-    "uae": "ARE",
-    "united arab emirates": "ARE",
-    "qatar": "QAT",
-    "kuwait": "KWT",
-    "bahrain": "BHR",
-    "oman": "OMN",
-    "jordan": "JOR",
-    "lebanon": "LBN",
-    "yemen": "YEM",
-    "syria": "SYR",
-    # Africa & other
-    "egypt": "EGY",
-    "nigeria": "NGA",
-    "south africa": "ZAF",
-    "venezuela": "VEN",
-    "ukraine": "UKR",
-    "pakistan": "PAK",
-    "taiwan": "TWN",
-}
+
+def _build_country_map() -> dict[str, str]:
+    """
+    Build a comprehensive country name → ISO 3166-1 alpha-3 mapping.
+
+    Uses pycountry for full coverage of all 249 countries (official names,
+    common names). Supplemented by short-form aliases (informal names and
+    abbreviations that don't appear in the ISO standard).
+
+    Alpha-2 codes (2-letter) are intentionally excluded from auto-generation
+    to avoid false positives — e.g. "in" matching India in normal English text.
+    Only unambiguous short aliases are added manually.
+    """
+    mapping: dict[str, str] = {}
+
+    try:
+        import pycountry
+        for c in pycountry.countries:
+            a3 = c.alpha_3
+            mapping[c.name.lower()] = a3
+            if hasattr(c, "common_name"):
+                mapping[c.common_name.lower()] = a3
+            if hasattr(c, "official_name"):
+                mapping[c.official_name.lower()] = a3
+    except ImportError:
+        logger.warning("pycountry not installed — country detection limited to manual aliases")
+
+    # Short-form aliases and informal names not in the ISO standard
+    mapping.update({
+        "russia":  "RUS",
+        "uk":      "GBR",
+        "uae":     "ARE",
+        "us":      "USA",
+        "usa":     "USA",
+        "korea":   "KOR",   # default to South Korea
+        "turkiye": "TUR",
+    })
+    return mapping
+
+
+COUNTRY_NAME_TO_ISO: dict[str, str] = _build_country_map()
 
 
 REGION_TO_ISOS = {
