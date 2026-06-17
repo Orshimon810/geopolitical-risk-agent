@@ -171,7 +171,7 @@ def _format_portfolio_block(
         name = h.get("name", "")
         asset_type = h.get("asset_type", "")
         qty = h.get("quantity")
-        val = h.get("value_usd")
+        val = h.get("cost_basis_usd")
 
         price_info = portfolio_prices.get(ticker, {})
         if price_info.get("status") == "ok":

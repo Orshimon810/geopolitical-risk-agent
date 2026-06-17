@@ -531,7 +531,7 @@ async def add_holding(
     name: str,
     asset_type: str,
     quantity: float | None = None,
-    value_usd: float | None = None,
+    cost_basis_usd: float | None = None,
 ) -> UserPortfolio:
     """
     Add a new holding to a user's portfolio.
@@ -543,7 +543,7 @@ async def add_holding(
         name=name,
         asset_type=asset_type,
         quantity=quantity,
-        value_usd=value_usd,
+        cost_basis_usd=cost_basis_usd,
     )
     session.add(holding)
     await session.flush()
@@ -557,7 +557,7 @@ async def update_holding(
     *,
     name: str | None = None,
     quantity: float | None | type(...) = ...,
-    value_usd: float | None | type(...) = ...,
+    cost_basis_usd: float | None | type(...) = ...,
 ) -> UserPortfolio | None:
     """
     Update mutable fields of a holding. Returns None if not found or wrong owner.
@@ -576,8 +576,8 @@ async def update_holding(
         holding.name = name
     if quantity is not ...:
         holding.quantity = quantity  # type: ignore[assignment]
-    if value_usd is not ...:
-        holding.value_usd = value_usd  # type: ignore[assignment]
+    if cost_basis_usd is not ...:
+        holding.cost_basis_usd = cost_basis_usd  # type: ignore[assignment]
 
     await session.flush()
     return holding

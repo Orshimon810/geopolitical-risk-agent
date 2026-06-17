@@ -239,7 +239,9 @@ class UserPortfolio(Base):
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     asset_type: Mapped[str] = mapped_column(String(20), nullable=False)
     quantity: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
-    value_usd: Mapped[float | None] = mapped_column(Numeric(18, 2), nullable=True)
+    cost_basis_usd: Mapped[float | None] = mapped_column(Numeric(18, 2), nullable=True)
+    last_price_usd: Mapped[float | None] = mapped_column(Numeric(18, 2), nullable=True)
+    price_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
     )

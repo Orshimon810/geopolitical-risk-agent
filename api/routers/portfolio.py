@@ -3,10 +3,11 @@ Portfolio router — CRUD for user investment holdings.
 
 GET  /portfolio/holdings          → list all holdings for the authenticated user
 POST /portfolio/holdings          → add a holding (max 20 per user)
-PUT  /portfolio/holdings/{id}     → update name / quantity / value_usd
+PUT  /portfolio/holdings/{id}     → update name / quantity / cost_basis_usd
 DELETE /portfolio/holdings/{id}   → remove a holding
 GET  /portfolio/search?q=         → ticker/company autocomplete (via yfinance)
-GET  /portfolio/quote?ticker=     → live price for a ticker (via yfinance)
+GET  /portfolio/quote?ticker=     → live price for a single ticker (via yfinance)
+GET  /portfolio/quotes?tickers=   → live prices for multiple tickers, comma-separated
 """
 
 import asyncio
@@ -93,7 +94,7 @@ async def create_holding(
             name=body.name,
             asset_type=body.asset_type,
             quantity=body.quantity,
-            value_usd=body.value_usd,
+            cost_basis_usd=body.cost_basis_usd,
         )
         await session.commit()
     except IntegrityError:
@@ -110,7 +111,7 @@ async def create_holding(
 @router.put(
     "/holdings/{holding_id}",
     response_model=PortfolioHoldingResponse,
-    summary="Update name, quantity, or value_usd of a holding",
+    summary="Update name, quantity, or cost_basis_usd of a holding",
 )
 async def update_holding_endpoint(
     holding_id: str,
@@ -125,7 +126,7 @@ async def update_holding_endpoint(
 
     # Use sentinel to distinguish "not provided" from "set to None"
     quantity = body.quantity if body.quantity is not None else ...
-    value_usd = body.value_usd if body.value_usd is not None else ...
+    cost_basis_usd = body.cost_basis_usd if body.cost_basis_usd is not None else ...
 
     holding = await update_holding(
         session,
@@ -133,7 +134,7 @@ async def update_holding_endpoint(
         current_user.id,
         name=body.name,
         quantity=quantity,  # type: ignore[arg-type]
-        value_usd=value_usd,  # type: ignore[arg-type]
+        cost_basis_usd=cost_basis_usd,  # type: ignore[arg-type]
     )
     if holding is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Holding not found.")
@@ -212,3 +213,33 @@ async def get_ticker_quote(
             return TickerQuoteResponse(ticker=ticker.upper(), price=None, currency="USD")
 
     return await asyncio.to_thread(_quote)
+
+
+@router.get(
+    "/quotes",
+    response_model=list[TickerQuoteResponse],
+    summary="Fetch live prices for multiple tickers in one call (max 20, comma-separated)",
+)
+async def get_ticker_quotes(
+    tickers: str = Query(
+        min_length=1,
+        max_length=500,
+        description="Comma-separated Yahoo Finance ticker symbols (e.g. AAPL,MSFT,BTC-USD)",
+    ),
+    current_user: User = Depends(get_current_user),
+) -> list[TickerQuoteResponse]:
+    ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()][:_MAX_HOLDINGS]
+
+    def _batch_quote() -> list[TickerQuoteResponse]:
+        results: list[TickerQuoteResponse] = []
+        for t in ticker_list:
+            try:
+                info = yf.Ticker(t).fast_info
+                price = float(info.last_price) if info.last_price is not None else None
+                currency: str = getattr(info, "currency", None) or "USD"
+                results.append(TickerQuoteResponse(ticker=t, price=price, currency=currency))
+            except Exception:
+                results.append(TickerQuoteResponse(ticker=t, price=None, currency="USD"))
+        return results
+
+    return await asyncio.to_thread(_batch_quote)
