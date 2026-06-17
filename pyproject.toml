@@ -34,6 +34,9 @@ dependencies = [
   "redis>=5.0.0",                # redis.asyncio + sync client for Celery
   "celery>=5.3.0",
 
+  # --- Web search fallback ---
+  "tavily-python>=0.3.0",             # on-demand web search when corpus has no coverage
+
   # --- Config / utilities ---
   "python-dotenv>=1.0.1",
   "pydantic>=2.7.0",
