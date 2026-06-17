@@ -56,13 +56,14 @@ def rag_research_node(state: DynamicAgentState) -> DynamicAgentState:
     # Historical chunks first — they anchor the evidence list
     for sub_question in plan:
         for c in raw_historical.get(sub_question, []):
-            text   = c.get("text", "") or ""
-            source = c.get("source", "local_corpus") or "local_corpus"
-            key    = (source, text)
+            text       = c.get("text", "") or ""
+            source     = c.get("source", "local_corpus") or "local_corpus"
+            similarity = c.get("similarity", 0.0)
+            key        = (source, text)
             if not text or key in seen:
                 continue
             seen.add(key)
-            retrieved_chunks.append({"question": sub_question, "text": text, "source": source})
+            retrieved_chunks.append({"question": sub_question, "text": text, "source": source, "similarity": similarity})
             evidence.append({"title": sub_question, "url": source, "snippet": text})
 
     # Live news chunks — tagged so the LLM knows they are recent
@@ -88,18 +89,22 @@ def rag_research_node(state: DynamicAgentState) -> DynamicAgentState:
         if raw_historical.get(sq) or raw_live.get(sq)
     )
 
+    similarities = [c["similarity"] for c in retrieved_chunks if "similarity" in c]
+    avg_sim = sum(similarities) / max(len(similarities), 1)
+    avg_cosine_distance = round(1.0 - avg_sim, 4)
+
     source_quality: SourceQuality = {
         "total_chunks": len(retrieved_chunks),
         "live_chunks": live_count,
         "hist_chunks": hist_count,
         "sub_questions_answered": sub_questions_answered,
-        "avg_cosine_distance": 0.0,
-        "thin_evidence": sub_questions_answered < len(plan),
+        "avg_cosine_distance": avg_cosine_distance,
+        "thin_evidence": sub_questions_answered < len(plan) or avg_sim < 0.40,
     }
 
     logger.info(
-        "RAG blend | sub-questions=%d | historical=%d | live=%d | total=%d | thin=%s",
-        len(plan), hist_count, live_count, len(retrieved_chunks), source_quality["thin_evidence"],
+        "RAG blend | sub-questions=%d | historical=%d | live=%d | total=%d | avg_distance=%.3f | thin=%s",
+        len(plan), hist_count, live_count, len(retrieved_chunks), avg_cosine_distance, source_quality["thin_evidence"],
     )
     if live_count == 0:
         logger.info("RAG blend | no live chunks passed cosine threshold")
