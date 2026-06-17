@@ -96,7 +96,9 @@ def rag_research_node(state: DynamicAgentState) -> DynamicAgentState:
     # Only fires when TAVILY_API_KEY is set; skipped silently otherwise.
     # Results are persisted to ephemeral_embeddings so future queries on the
     # same topic hit the cache instead of calling Tavily again.
-    _WELL_ANSWERED_MIN_SIM = 0.50
+    # 0.55 separates specific corpus coverage (RAND/BIS score 0.57+) from
+    # generic tangential matches (World Bank global reports score 0.45-0.54).
+    _WELL_ANSWERED_MIN_SIM = 0.55
 
     web_count = 0
     web_answered: Set[str] = set()
