@@ -324,6 +324,12 @@ def analysis_node(state: DynamicAgentState) -> DynamicAgentState:
 
     evidence_block = _format_evidence(retrieved_chunks, max_items=12)
 
+    # Build the definitive list of sources actually retrieved — used to enforce
+    # citation in the prompt and to override any LLM hallucination post-hoc.
+    actual_sources = list(dict.fromkeys(
+        c["source"] for c in retrieved_chunks if c.get("source")
+    ))
+
     signals_block = ""
     countries = signals.get("countries", {})
     if countries:
@@ -359,6 +365,8 @@ def analysis_node(state: DynamicAgentState) -> DynamicAgentState:
         f"{total_chunks} total chunks retrieved"
         if n_questions > 0 else ""
     )
+
+    source_list = "\n".join(f"  - {s}" for s in actual_sources) if actual_sources else "  (no sources retrieved)"
 
     # Build portfolio block for the main prompt (fallback path)
     portfolio_block = ""
@@ -416,9 +424,13 @@ Scenario discipline:
   market reactions and real economic impacts.
 
 Source citation discipline:
-- Evidence items tagged "[LIVE NEWS]" are real recent news articles — cite them by outlet name.
-- Example: "[LIVE NEWS] BeInCrypto" → cite as "BeInCrypto — Iran ceasefire market reaction".
-- Never replace real source names with generic labels like "Bloomberg" or "Market analysis reports".
+- Cite ONLY the sources listed below — do not invent or substitute any other names.
+- Historical corpus chunks: cite using the exact filename shown in parentheses, e.g. "ar2023e.pdf — BIS monetary stability analysis".
+- [LIVE NEWS] chunks: cite as "OutletName — brief description", e.g. "BeInCrypto — Iran ceasefire market reaction".
+- Never use generic placeholders like "Bloomberg", "Reuters", or "Market analysis reports" unless they appear in the list below.
+
+Permitted sources (retrieved for this query):
+{source_list}
 """
 
     output: AnalysisOutput = structured_llm.invoke(prompt)
@@ -428,7 +440,20 @@ Source citation discipline:
     scenarios         = output.scenarios
     investor_takeaway = output.investor_takeaway
     confidence        = output.confidence
-    sources           = output.sources
+
+    # Use actual retrieved source names — LLM frequently hallucinates outlet names
+    # (e.g. "BelnCrypto", "Yahoo Finance") when the real sources are corpus PDFs.
+    # Actual sources are always correct; LLM descriptions are kept as a suffix when
+    # the LLM did cite the right name, otherwise the raw filename is used.
+    if actual_sources:
+        llm_sources = output.sources or []
+        merged = []
+        for actual in actual_sources:
+            match = next((s for s in llm_sources if actual.lower() in s.lower()), None)
+            merged.append(match if match else actual)
+        sources = merged
+    else:
+        sources = output.sources
 
     # -------------------------
     # Portfolio analysis — two independent passes
