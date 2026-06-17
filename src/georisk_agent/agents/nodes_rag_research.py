@@ -18,7 +18,7 @@ def rag_research_node(state: DynamicAgentState) -> DynamicAgentState:
       3. plan               — original planner output
 
     Retrieval budget per sub-question:
-      - k=3 from geopolitical_embeddings (historical corpus)
+      - k=5 from geopolitical_embeddings (historical corpus)
       - k=2 from ephemeral_embeddings (live news, cosine distance < 0.45)
 
     After retrieval, populates source_quality so the Reviewer can assess
@@ -32,9 +32,10 @@ def rag_research_node(state: DynamicAgentState) -> DynamicAgentState:
     retrieved_chunks = []
     evidence: List[Evidence] = []
     seen: set[Tuple[str, str]] = set()
+    hist_count = 0
 
     def _fetch_historical(sq: str):
-        return "hist", sq, retrieve(sq, k=3)
+        return "hist", sq, retrieve(sq, k=5)
 
     def _fetch_live(sq: str):
         return "live", sq, retrieve_ephemeral(sq, k=2)
@@ -65,6 +66,7 @@ def rag_research_node(state: DynamicAgentState) -> DynamicAgentState:
             seen.add(key)
             retrieved_chunks.append({"question": sub_question, "text": text, "source": source, "similarity": similarity})
             evidence.append({"title": sub_question, "url": source, "snippet": text})
+            hist_count += 1
 
     # Live news chunks — tagged so the LLM knows they are recent
     live_count = 0
@@ -83,7 +85,6 @@ def rag_research_node(state: DynamicAgentState) -> DynamicAgentState:
             evidence.append({"title": title, "url": url or tagged_source, "snippet": text})
             live_count += 1
 
-    hist_count = sum(len(raw_historical.get(sq, [])) for sq in plan)
     sub_questions_answered = sum(
         1 for sq in plan
         if raw_historical.get(sq) or raw_live.get(sq)
