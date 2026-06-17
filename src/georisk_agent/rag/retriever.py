@@ -97,11 +97,15 @@ def _embed(text: str) -> list[float]:
 # Public retriever
 # ---------------------------------------------------------------------------
 
-def retrieve(query: str, k: int = 5) -> list[dict[str, Any]]:
+def retrieve(query: str, k: int = 5, min_similarity: float = 0.35) -> list[dict[str, Any]]:
     """
     Retrieve the top-k most semantically relevant chunks for a query.
 
-    Returns a list of dicts: {"text": str, "source": str}
+    min_similarity=0.35 filters out chunks that are genuinely unrelated —
+    without this, every sub-question always gets k hits regardless of relevance,
+    making thin_evidence permanently False even for niche topics.
+
+    Returns a list of dicts: {"text": str, "source": str, "similarity": float}
     """
     if not settings.database_url:
         logger.warning(
@@ -114,10 +118,10 @@ def retrieve(query: str, k: int = 5) -> list[dict[str, Any]]:
 
     async def _search() -> list[dict[str, Any]]:
         async with get_session() as session:
-            return await semantic_search(session, embedding, k=k)
+            return await semantic_search(session, embedding, k=k, min_similarity=min_similarity)
 
     results = _run_async(_search())
-    return [{"text": r["text"], "source": r["source"]} for r in results]
+    return [{"text": r["text"], "source": r["source"], "similarity": r["similarity"]} for r in results]
 
 
 def retrieve_ephemeral(query: str, k: int = 2, max_distance: float = 0.45) -> list[dict[str, Any]]:

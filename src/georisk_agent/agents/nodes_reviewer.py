@@ -37,15 +37,18 @@ def _calibrate_confidence(
     Returns (calibrated_confidence, reason_string).
     Only downgrades — never upgrades.
     """
-    total_chunks = sq.get("total_chunks", 0)
-    answered     = sq.get("sub_questions_answered", 0)
-    n_questions  = len(plan)
+    total_chunks  = sq.get("total_chunks", 0)
+    answered      = sq.get("sub_questions_answered", 0)
+    n_questions   = len(plan)
+    avg_distance  = sq.get("avg_cosine_distance", 0.0)
 
     if confidence == "High":
         if total_chunks < 5:
             return "Medium", f"High→Medium: only {total_chunks} chunks retrieved (need ≥5)"
         if n_questions > 0 and answered < n_questions:
             return "Medium", f"High→Medium: only {answered}/{n_questions} sub-questions answered"
+        if avg_distance > 0.45:
+            return "Medium", f"High→Medium: avg cosine distance {avg_distance:.2f} (weak chunk relevance)"
 
     if confidence in ("High", "Medium"):
         if total_chunks <= 2:
@@ -54,6 +57,8 @@ def _calibrate_confidence(
             return "Low", "→Low: no sub-questions answered"
         if n_questions >= 3 and answered < (n_questions // 2):
             return "Low", f"→Low: only {answered}/{n_questions} sub-questions answered (<50%)"
+        if avg_distance > 0.58:
+            return "Low", f"→Low: avg cosine distance {avg_distance:.2f} (very weak evidence relevance)"
 
     return confidence, ""
 
