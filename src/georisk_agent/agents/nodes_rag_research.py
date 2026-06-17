@@ -4,6 +4,7 @@ from typing import List, Set, Tuple
 
 from georisk_agent.app.config import settings
 from georisk_agent.app.types import DynamicAgentState, Evidence, SourceQuality
+from georisk_agent.news.ingestor import ingest_web_results
 from georisk_agent.rag.retriever import retrieve, retrieve_ephemeral
 from georisk_agent.rag.web_search import search_web
 
@@ -89,6 +90,8 @@ def rag_research_node(state: DynamicAgentState) -> DynamicAgentState:
 
     # Web fallback — Tavily search for sub-questions with zero corpus or live hits.
     # Only fires when TAVILY_API_KEY is set; skipped silently otherwise.
+    # Results are also persisted to ephemeral_embeddings so future similar
+    # queries hit the cache instead of calling Tavily again.
     web_count = 0
     web_answered: Set[str] = set()
     if settings.tavily_api_key:
@@ -97,8 +100,11 @@ def rag_research_node(state: DynamicAgentState) -> DynamicAgentState:
             if not raw_historical.get(sq) and not raw_live.get(sq)
         ]
         if unanswered_sqs:
+            raw_web_results: list[dict] = []
             for sq in unanswered_sqs:
-                for r in search_web(sq, settings.tavily_api_key, max_results=3):
+                sq_results = search_web(sq, settings.tavily_api_key, max_results=3)
+                raw_web_results.extend(sq_results)
+                for r in sq_results:
                     text        = r.get("text", "") or ""
                     url         = r.get("url", "") or ""
                     source_name = r.get("source", "") or url or "Web"
@@ -119,6 +125,7 @@ def rag_research_node(state: DynamicAgentState) -> DynamicAgentState:
                     "RAG web fallback | %d web chunks added for %d unanswered sub-questions",
                     web_count, len(unanswered_sqs),
                 )
+                ingest_web_results(raw_web_results)
 
     sub_questions_answered = sum(
         1 for sq in plan
