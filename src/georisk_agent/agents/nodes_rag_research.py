@@ -88,16 +88,25 @@ def rag_research_node(state: DynamicAgentState) -> DynamicAgentState:
             evidence.append({"title": title, "url": url or tagged_source, "snippet": text})
             live_count += 1
 
-    # Web fallback — Tavily search for sub-questions with zero corpus or live hits.
+    # Web fallback — Tavily search for sub-questions that are not well covered.
+    # "Not well covered" means: no live chunk AND no historical chunk with
+    # similarity >= 0.50. This catches the common case where the corpus returns
+    # generic/tangential matches (e.g. World Bank global reports for a niche
+    # country query) — those score ~0.45-0.50 and are not truly on-topic.
     # Only fires when TAVILY_API_KEY is set; skipped silently otherwise.
-    # Results are also persisted to ephemeral_embeddings so future similar
-    # queries hit the cache instead of calling Tavily again.
+    # Results are persisted to ephemeral_embeddings so future queries on the
+    # same topic hit the cache instead of calling Tavily again.
+    _WELL_ANSWERED_MIN_SIM = 0.50
+
     web_count = 0
     web_answered: Set[str] = set()
     if settings.tavily_api_key:
         unanswered_sqs = [
             sq for sq in plan
-            if not raw_historical.get(sq) and not raw_live.get(sq)
+            if not raw_live.get(sq) and not any(
+                c.get("similarity", 0.0) >= _WELL_ANSWERED_MIN_SIM
+                for c in raw_historical.get(sq, [])
+            )
         ]
         if unanswered_sqs:
             raw_web_results: list[dict] = []
