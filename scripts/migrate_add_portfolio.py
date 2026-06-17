@@ -34,8 +34,10 @@ CREATE TABLE IF NOT EXISTS user_portfolios (
     asset_type  VARCHAR(20) NOT NULL
                 CONSTRAINT chk_portfolio_asset_type
                 CHECK (asset_type IN ('stock', 'etf', 'crypto', 'commodity', 'bond')),
-    quantity    NUMERIC(18, 6),
-    value_usd   NUMERIC(18, 2),
+    quantity         NUMERIC(18, 6),
+    cost_basis_usd   NUMERIC(18, 2),
+    last_price_usd   NUMERIC(18, 2),
+    price_updated_at TIMESTAMPTZ,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT uq_portfolio_user_ticker UNIQUE (user_id, ticker)
 );

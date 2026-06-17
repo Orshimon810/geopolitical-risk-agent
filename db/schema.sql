@@ -207,7 +207,7 @@ COMMENT ON COLUMN ephemeral_embeddings.expires_at   IS 'Set to ingested_at + EPH
 -- ============================================================================
 -- TABLE: user_portfolios
 -- Per-user investment holdings. Max 20 tickers per user (enforced in app layer).
--- Ticker + asset_type are immutable after creation; name/quantity/value_usd are editable.
+-- Ticker + asset_type are immutable after creation; name/quantity/cost_basis_usd are editable.
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS user_portfolios (
     id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -220,8 +220,10 @@ CREATE TABLE IF NOT EXISTS user_portfolios (
                 CONSTRAINT chk_portfolio_asset_type
                 CHECK (asset_type IN ('stock', 'etf', 'crypto', 'commodity', 'bond')),
 
-    quantity    NUMERIC(18, 6),     -- optional: number of shares/units
-    value_usd   NUMERIC(18, 2),     -- optional: position value in USD
+    quantity         NUMERIC(18, 6),     -- optional: number of shares/units
+    cost_basis_usd   NUMERIC(18, 2),     -- optional: what the user paid (entry value)
+    last_price_usd   NUMERIC(18, 2),     -- last known market price per unit (refreshed by background task)
+    price_updated_at TIMESTAMPTZ,        -- when last_price_usd was last fetched
 
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
@@ -231,9 +233,12 @@ CREATE TABLE IF NOT EXISTS user_portfolios (
 CREATE INDEX IF NOT EXISTS idx_user_portfolios_user_id
     ON user_portfolios (user_id);
 
-COMMENT ON TABLE  user_portfolios           IS 'User investment holdings for opt-in portfolio impact analysis.';
-COMMENT ON COLUMN user_portfolios.ticker    IS 'Yahoo Finance ticker symbol — uppercase, immutable after creation.';
-COMMENT ON COLUMN user_portfolios.asset_type IS 'One of: stock, etf, crypto, commodity, bond.';
+COMMENT ON TABLE  user_portfolios                    IS 'User investment holdings for opt-in portfolio impact analysis.';
+COMMENT ON COLUMN user_portfolios.ticker             IS 'Yahoo Finance ticker symbol — uppercase, immutable after creation.';
+COMMENT ON COLUMN user_portfolios.asset_type         IS 'One of: stock, etf, crypto, commodity, bond.';
+COMMENT ON COLUMN user_portfolios.cost_basis_usd     IS 'User-recorded entry value in USD; never overwritten by price refresh.';
+COMMENT ON COLUMN user_portfolios.last_price_usd     IS 'Last fetched market price per unit; written by background refresh or on-load update.';
+COMMENT ON COLUMN user_portfolios.price_updated_at   IS 'Timestamp of the last last_price_usd update.';
 
 
 -- ============================================================================
