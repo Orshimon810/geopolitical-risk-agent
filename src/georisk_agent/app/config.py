@@ -51,6 +51,11 @@ class Settings(BaseModel):
     # How long (hours) a news article lives in ephemeral_embeddings before being flushed
     ephemeral_ttl_hours: int = int(os.getenv("EPHEMERAL_TTL_HOURS", "48"))
 
+    # --- Web search fallback (Tavily) ---
+    # Get a free key at https://app.tavily.com — 1 000 free searches/month
+    # Leave empty to disable the web fallback (corpus + live news only).
+    tavily_api_key: str = os.getenv("TAVILY_API_KEY", "")
+
     # --- Dynamic pipeline (Reviewer loop + HITL) ---
     # Max reviewer retries per analysis run (0 = reviewer runs but never retries)
     max_retries: int = int(os.getenv("MAX_RETRIES", "1"))

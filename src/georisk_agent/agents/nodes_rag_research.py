@@ -1,9 +1,11 @@
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Tuple
+from typing import List, Set, Tuple
 
+from georisk_agent.app.config import settings
 from georisk_agent.app.types import DynamicAgentState, Evidence, SourceQuality
 from georisk_agent.rag.retriever import retrieve, retrieve_ephemeral
+from georisk_agent.rag.web_search import search_web
 
 logger = logging.getLogger(__name__)
 
@@ -85,9 +87,42 @@ def rag_research_node(state: DynamicAgentState) -> DynamicAgentState:
             evidence.append({"title": title, "url": url or tagged_source, "snippet": text})
             live_count += 1
 
+    # Web fallback — Tavily search for sub-questions with zero corpus or live hits.
+    # Only fires when TAVILY_API_KEY is set; skipped silently otherwise.
+    web_count = 0
+    web_answered: Set[str] = set()
+    if settings.tavily_api_key:
+        unanswered_sqs = [
+            sq for sq in plan
+            if not raw_historical.get(sq) and not raw_live.get(sq)
+        ]
+        if unanswered_sqs:
+            for sq in unanswered_sqs:
+                for r in search_web(sq, settings.tavily_api_key, max_results=3):
+                    text        = r.get("text", "") or ""
+                    url         = r.get("url", "") or ""
+                    source_name = r.get("source", "") or url or "Web"
+                    key         = (url or source_name, text)
+                    if not text or key in seen:
+                        continue
+                    seen.add(key)
+                    retrieved_chunks.append({
+                        "question": sq,
+                        "text":     text,
+                        "source":   f"[WEB] {source_name}",
+                    })
+                    evidence.append({"title": r.get("title", sq), "url": url, "snippet": text})
+                    web_count += 1
+                    web_answered.add(sq)
+            if web_count:
+                logger.info(
+                    "RAG web fallback | %d web chunks added for %d unanswered sub-questions",
+                    web_count, len(unanswered_sqs),
+                )
+
     sub_questions_answered = sum(
         1 for sq in plan
-        if raw_historical.get(sq) or raw_live.get(sq)
+        if raw_historical.get(sq) or raw_live.get(sq) or sq in web_answered
     )
 
     similarities = [c["similarity"] for c in retrieved_chunks if "similarity" in c]
@@ -104,8 +139,8 @@ def rag_research_node(state: DynamicAgentState) -> DynamicAgentState:
     }
 
     logger.info(
-        "RAG blend | sub-questions=%d | historical=%d | live=%d | total=%d | avg_distance=%.3f | thin=%s",
-        len(plan), hist_count, live_count, len(retrieved_chunks), avg_cosine_distance, source_quality["thin_evidence"],
+        "RAG blend | sub-questions=%d | historical=%d | live=%d | web=%d | total=%d | avg_distance=%.3f | thin=%s",
+        len(plan), hist_count, live_count, web_count, len(retrieved_chunks), avg_cosine_distance, source_quality["thin_evidence"],
     )
     if live_count == 0:
         logger.info("RAG blend | no live chunks passed cosine threshold")
