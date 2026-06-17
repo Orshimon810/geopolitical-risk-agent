@@ -36,6 +36,7 @@ dependencies = [
 
   # --- Web search fallback ---
   "tavily-python>=0.3.0",             # on-demand web search when corpus has no coverage
+  "pycountry>=24.6.1",                # ISO 3166-1 country data — all 249 countries
 
   # --- Config / utilities ---
   "python-dotenv>=1.0.1",
