@@ -61,6 +61,54 @@ async def _upsert_batch(articles: list[dict[str, Any]], ttl_hours: int) -> int:
     return ingested
 
 
+async def _upsert_web_batch(web_results: list[dict[str, Any]], ttl_hours: int) -> int:
+    """Embed Tavily result dicts and upsert into ephemeral_embeddings."""
+    ingested = 0
+    async with get_session() as session:
+        for r in web_results:
+            url = (r.get("url") or "").strip()
+            text = (r.get("text") or "").strip()
+            if not url or not text:
+                continue
+            chunk_id = url_to_chunk_id(url)
+            try:
+                embedding = _embed(text)
+            except Exception as exc:
+                logger.warning("Embedding failed for web result %r: %s", url, exc)
+                continue
+            expires_at = datetime.now(timezone.utc) + timedelta(hours=ttl_hours)
+            await upsert_ephemeral_embedding(
+                session,
+                chunk_id=chunk_id,
+                source=r.get("source", url),
+                url=url,
+                title=r.get("title", ""),
+                text_content=text,
+                embedding=embedding,
+                published_at=datetime.now(timezone.utc),
+                expires_at=expires_at,
+            )
+            ingested += 1
+        await session.commit()
+    return ingested
+
+
+def ingest_web_results(web_results: list[dict[str, Any]]) -> int:
+    """
+    Embed Tavily web search results and upsert into ephemeral_embeddings.
+
+    Called after a successful web fallback in rag_research_node so that
+    future queries on the same topic hit the ephemeral cache instead of
+    calling Tavily again. Deduplicates by URL via SHA-256 chunk_id.
+    Returns the number of chunks stored.
+    """
+    if not web_results or not settings.database_url:
+        return 0
+    count = _run_async(_upsert_web_batch(web_results, settings.ephemeral_ttl_hours))
+    logger.info("Web fallback ingest: %d chunks stored in ephemeral_embeddings", count)
+    return count
+
+
 def ingest_latest_news() -> int:
     """
     Fetch news from the configured provider, embed each article, and upsert
