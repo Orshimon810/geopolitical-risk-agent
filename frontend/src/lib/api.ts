@@ -129,7 +129,7 @@ export const api = {
     name: string;
     asset_type: string;
     quantity?: number | null;
-    value_usd?: number | null;
+    cost_basis_usd?: number | null;
   }): Promise<PortfolioHolding> {
     return apiFetch<PortfolioHolding>("/portfolio/holdings", {
       method: "POST",
@@ -139,7 +139,7 @@ export const api = {
 
   updateHolding(
     id: string,
-    data: { name?: string; quantity?: number | null; value_usd?: number | null }
+    data: { name?: string; quantity?: number | null; cost_basis_usd?: number | null }
   ): Promise<PortfolioHolding> {
     return apiFetch<PortfolioHolding>(`/portfolio/holdings/${id}`, {
       method: "PUT",
@@ -160,6 +160,12 @@ export const api = {
   getTickerQuote(ticker: string): Promise<{ ticker: string; price: number | null; currency: string }> {
     return apiFetch<{ ticker: string; price: number | null; currency: string }>(
       `/portfolio/quote?ticker=${encodeURIComponent(ticker)}`
+    );
+  },
+
+  getPortfolioQuotes(tickers: string[]): Promise<{ ticker: string; price: number | null; currency: string }[]> {
+    return apiFetch<{ ticker: string; price: number | null; currency: string }[]>(
+      `/portfolio/quotes?tickers=${encodeURIComponent(tickers.join(","))}`
     );
   },
 };

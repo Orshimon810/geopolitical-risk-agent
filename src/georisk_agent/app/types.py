@@ -16,7 +16,7 @@ class PortfolioHolding(TypedDict, total=False):
     name: str
     asset_type: str       # stock | etf | crypto | commodity | bond
     quantity: Optional[float]
-    value_usd: Optional[float]
+    cost_basis_usd: Optional[float]
 
 
 class SourceQuality(TypedDict):

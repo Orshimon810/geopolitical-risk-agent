@@ -45,7 +45,9 @@ export interface PortfolioHolding {
   name: string;
   asset_type: AssetType;
   quantity: number | null;
-  value_usd: number | null;
+  cost_basis_usd: number | null;
+  last_price_usd: number | null;
+  price_updated_at: string | null;
   created_at: string;
 }
 

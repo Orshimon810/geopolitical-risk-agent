@@ -90,7 +90,7 @@ async def analyze(
                     "name": h.name,
                     "asset_type": h.asset_type,
                     "quantity": float(h.quantity) if h.quantity is not None else None,
-                    "value_usd": float(h.value_usd) if h.value_usd is not None else None,
+                    "cost_basis_usd": float(h.cost_basis_usd) if h.cost_basis_usd is not None else None,
                 }
                 for h in holdings
             ]

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { Plus, Pencil, Trash2, Loader2, Check, X, Zap } from "lucide-react";
+import { Plus, Pencil, Trash2, Loader2, Check, X, Zap, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -41,7 +41,7 @@ const emptyAddForm = {
   name: "",
   asset_type: "stock" as AssetType,
   quantity: "",
-  value_usd: "",
+  cost_basis_usd: "",
 };
 
 interface TickerSuggestion {
@@ -54,7 +54,20 @@ interface EditState {
   id: string;
   name: string;
   quantity: string;
-  value_usd: string;
+  cost_basis_usd: string;
+}
+
+interface LivePrice {
+  price: number | null;
+  currency: string;
+  loading: boolean;
+}
+
+function fmt(value: number, decimals = 2): string {
+  return value.toLocaleString(undefined, {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
 }
 
 export default function PortfolioPage() {
@@ -69,6 +82,10 @@ export default function PortfolioPage() {
   const [editBusy, setEditBusy]     = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
+  // Live prices keyed by ticker
+  const [livePrices, setLivePrices] = useState<Record<string, LivePrice>>({});
+  const [pricesLoading, setPricesLoading] = useState(false);
+
   // Autocomplete state
   const [suggestions, setSuggestions]         = useState<TickerSuggestion[]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -79,14 +96,58 @@ export default function PortfolioPage() {
   const [quoteFetching, setQuoteFetching]     = useState(false);
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Fetch holdings then batch-fetch live prices
   useEffect(() => {
     let cancelled = false;
     api.getPortfolio()
-      .then((data) => { if (!cancelled) setHoldings(data); })
-      .catch((e: unknown) => { if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load portfolio"); })
+      .then((data) => {
+        if (cancelled) return;
+        setHoldings(data);
+        if (data.length > 0) {
+          fetchLivePrices(data.map((h) => h.ticker));
+        }
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load portfolio");
+      })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function fetchLivePrices(tickers: string[]) {
+    if (tickers.length === 0) return;
+    setPricesLoading(true);
+    // Optimistically mark all as loading
+    setLivePrices((prev) => {
+      const next = { ...prev };
+      for (const t of tickers) {
+        next[t] = { price: prev[t]?.price ?? null, currency: prev[t]?.currency ?? "USD", loading: true };
+      }
+      return next;
+    });
+    try {
+      const quotes = await api.getPortfolioQuotes(tickers);
+      setLivePrices((prev) => {
+        const next = { ...prev };
+        for (const q of quotes) {
+          next[q.ticker] = { price: q.price, currency: q.currency, loading: false };
+        }
+        return next;
+      });
+    } catch {
+      // Mark all as loaded with null price on failure
+      setLivePrices((prev) => {
+        const next = { ...prev };
+        for (const t of tickers) {
+          next[t] = { price: null, currency: "USD", loading: false };
+        }
+        return next;
+      });
+    } finally {
+      setPricesLoading(false);
+    }
+  }
 
   /* ── Autocomplete ── */
   function resetAddForm() {
@@ -131,11 +192,10 @@ export default function PortfolioPage() {
         setLivePrice(quote.price);
         setLiveCurrency(quote.currency);
         setAutoValue(true);
-        // Auto-compute value if quantity is already filled
         setAddForm((f) => {
           const qty = parseFloat(f.quantity);
           if (!isNaN(qty) && qty > 0) {
-            return { ...f, value_usd: (qty * quote.price!).toFixed(2) };
+            return { ...f, cost_basis_usd: (qty * quote.price!).toFixed(2) };
           }
           return f;
         });
@@ -152,7 +212,7 @@ export default function PortfolioPage() {
       const next = { ...f, quantity: value };
       if (autoValue && livePrice != null) {
         const qty = parseFloat(value);
-        next.value_usd = !isNaN(qty) && qty > 0 ? (qty * livePrice).toFixed(2) : "";
+        next.cost_basis_usd = !isNaN(qty) && qty > 0 ? (qty * livePrice).toFixed(2) : "";
       }
       return next;
     });
@@ -165,16 +225,18 @@ export default function PortfolioPage() {
     setAddBusy(true);
     try {
       const payload = {
-        ticker:     addForm.ticker.toUpperCase(),
-        name:       addForm.name,
-        asset_type: addForm.asset_type,
-        quantity:   addForm.quantity   ? parseFloat(addForm.quantity)   : null,
-        value_usd:  addForm.value_usd  ? parseFloat(addForm.value_usd)  : null,
+        ticker:         addForm.ticker.toUpperCase(),
+        name:           addForm.name,
+        asset_type:     addForm.asset_type,
+        quantity:       addForm.quantity       ? parseFloat(addForm.quantity)       : null,
+        cost_basis_usd: addForm.cost_basis_usd ? parseFloat(addForm.cost_basis_usd) : null,
       };
       const newHolding = await api.addHolding(payload);
       setHoldings((prev) => [...prev, newHolding]);
       resetAddForm();
       setShowAddForm(false);
+      // Fetch live price for the newly added ticker
+      fetchLivePrices([newHolding.ticker]);
     } catch (e: unknown) {
       setAddError(e instanceof Error ? e.message : "Failed to add holding");
     } finally {
@@ -185,10 +247,10 @@ export default function PortfolioPage() {
   /* ── Edit holding ── */
   function startEdit(h: PortfolioHolding) {
     setEditState({
-      id:        h.id,
-      name:      h.name,
-      quantity:  h.quantity  != null ? String(h.quantity)  : "",
-      value_usd: h.value_usd != null ? String(h.value_usd) : "",
+      id:             h.id,
+      name:           h.name,
+      quantity:       h.quantity       != null ? String(h.quantity)       : "",
+      cost_basis_usd: h.cost_basis_usd != null ? String(h.cost_basis_usd) : "",
     });
   }
 
@@ -197,9 +259,9 @@ export default function PortfolioPage() {
     setEditBusy(true);
     try {
       const updated = await api.updateHolding(editState.id, {
-        name:      editState.name,
-        quantity:  editState.quantity  ? parseFloat(editState.quantity)  : null,
-        value_usd: editState.value_usd ? parseFloat(editState.value_usd) : null,
+        name:           editState.name,
+        quantity:       editState.quantity       ? parseFloat(editState.quantity)       : null,
+        cost_basis_usd: editState.cost_basis_usd ? parseFloat(editState.cost_basis_usd) : null,
       });
       setHoldings((prev) => prev.map((h) => h.id === updated.id ? updated : h));
       setEditState(null);
@@ -221,6 +283,19 @@ export default function PortfolioPage() {
     } finally {
       setDeletingId(null);
     }
+  }
+
+  /* ── P&L helpers ── */
+  function getCurrentValue(h: PortfolioHolding): number | null {
+    const lp = livePrices[h.ticker];
+    if (!lp || lp.price == null || h.quantity == null) return null;
+    return lp.price * h.quantity;
+  }
+
+  function getPnL(h: PortfolioHolding): number | null {
+    const currentValue = getCurrentValue(h);
+    if (currentValue == null || h.cost_basis_usd == null) return null;
+    return currentValue - h.cost_basis_usd;
   }
 
   const atLimit = holdings.length >= MAX_HOLDINGS;
@@ -260,6 +335,11 @@ export default function PortfolioPage() {
                   Limit reached
                 </span>
               )}
+              {pricesLoading && (
+                <span className="text-xs text-amber-400/70 flex items-center gap-1">
+                  <Loader2 className="h-3 w-3 animate-spin" /> Fetching live prices…
+                </span>
+              )}
             </div>
           </div>
           <Button
@@ -278,7 +358,7 @@ export default function PortfolioPage() {
           <form onSubmit={handleAdd} className="mt-4 border-t border-slate-800 pt-4 space-y-4">
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
 
-              {/* Ticker autocomplete — spans 2 cols so name fits beside it on sm */}
+              {/* Ticker autocomplete */}
               <div className="space-y-1.5 sm:col-span-2 relative">
                 <Label htmlFor="new-ticker">Ticker / Company *</Label>
                 <div className="relative">
@@ -329,7 +409,7 @@ export default function PortfolioPage() {
                 )}
               </div>
 
-              {/* Asset Type — auto-filled on selection, user can override */}
+              {/* Asset Type */}
               <div className="space-y-1.5">
                 <Label htmlFor="new-type">Asset Type *</Label>
                 <select
@@ -344,7 +424,7 @@ export default function PortfolioPage() {
                 </select>
               </div>
 
-              {/* Name — auto-filled, editable */}
+              {/* Name */}
               <div className="space-y-1.5 sm:col-span-2">
                 <Label htmlFor="new-name">Name *</Label>
                 <Input
@@ -370,10 +450,10 @@ export default function PortfolioPage() {
                 />
               </div>
 
-              {/* Value USD — auto-computed when live price available */}
+              {/* Cost Basis — auto-computed when live price available */}
               <div className="space-y-1.5 sm:col-span-2">
                 <Label htmlFor="new-value" className="flex items-center gap-1.5">
-                  Value (USD)
+                  Cost Basis (USD)
                   {autoValue && (
                     <span className="text-[10px] font-semibold text-amber-400 bg-amber-500/10 border border-amber-500/20 px-1.5 py-0.5 rounded-full flex items-center gap-0.5">
                       <Zap className="h-2.5 w-2.5" /> Auto
@@ -385,11 +465,11 @@ export default function PortfolioPage() {
                   type="number"
                   min="0"
                   step="any"
-                  placeholder="Position value"
-                  value={addForm.value_usd}
+                  placeholder="What you paid (position value)"
+                  value={addForm.cost_basis_usd}
                   onChange={(e) => {
                     setAutoValue(false);
-                    setAddForm((f) => ({ ...f, value_usd: e.target.value }));
+                    setAddForm((f) => ({ ...f, cost_basis_usd: e.target.value }));
                   }}
                 />
               </div>
@@ -433,14 +513,22 @@ export default function PortfolioPage() {
                 <TableHead>Ticker</TableHead>
                 <TableHead>Name</TableHead>
                 <TableHead>Type</TableHead>
-                <TableHead className="text-right">Quantity</TableHead>
-                <TableHead className="text-right">Value (USD)</TableHead>
+                <TableHead className="text-right">Qty</TableHead>
+                <TableHead className="text-right">Cost Basis</TableHead>
+                <TableHead className="text-right">Current Value</TableHead>
+                <TableHead className="text-right">P&amp;L</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {holdings.map((h) => {
                 const isEditing = editState?.id === h.id;
+                const lp = livePrices[h.ticker];
+                const currentValue = getCurrentValue(h);
+                const pnl = getPnL(h);
+                const pnlPositive = pnl != null && pnl > 0;
+                const pnlNegative = pnl != null && pnl < 0;
+
                 return (
                   <TableRow key={h.id}>
                     <TableCell>
@@ -482,20 +570,50 @@ export default function PortfolioPage() {
                       )}
                     </TableCell>
 
+                    {/* Cost Basis */}
                     <TableCell className="text-right">
                       {isEditing ? (
                         <Input
                           type="number"
                           min="0"
                           step="any"
-                          value={editState.value_usd}
-                          onChange={(e) => setEditState((s) => s ? { ...s, value_usd: e.target.value } : s)}
+                          value={editState.cost_basis_usd}
+                          onChange={(e) => setEditState((s) => s ? { ...s, cost_basis_usd: e.target.value } : s)}
                           className="h-7 text-xs w-28 ml-auto"
                         />
                       ) : (
                         <span className="text-slate-400 font-mono text-xs">
-                          {h.value_usd != null ? `$${h.value_usd.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
+                          {h.cost_basis_usd != null ? `$${fmt(h.cost_basis_usd)}` : "—"}
                         </span>
+                      )}
+                    </TableCell>
+
+                    {/* Current Value */}
+                    <TableCell className="text-right">
+                      {lp?.loading ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin text-slate-600 ml-auto" />
+                      ) : currentValue != null ? (
+                        <span className="text-slate-200 font-mono text-xs font-medium">
+                          ${fmt(currentValue)}
+                        </span>
+                      ) : lp && lp.price == null ? (
+                        <span className="text-slate-600 text-xs">unavailable</span>
+                      ) : (
+                        <span className="text-slate-600 text-xs">—</span>
+                      )}
+                    </TableCell>
+
+                    {/* P&L */}
+                    <TableCell className="text-right">
+                      {lp?.loading ? (
+                        <span className="text-slate-600 text-xs">…</span>
+                      ) : pnl != null ? (
+                        <span className={`font-mono text-xs font-medium flex items-center justify-end gap-0.5 ${pnlPositive ? "text-emerald-400" : pnlNegative ? "text-rose-400" : "text-slate-400"}`}>
+                          {pnlPositive ? <TrendingUp className="h-3 w-3" /> : pnlNegative ? <TrendingDown className="h-3 w-3" /> : <Minus className="h-3 w-3" />}
+                          {pnl >= 0 ? "+" : ""}{fmt(pnl)}
+                        </span>
+                      ) : (
+                        <span className="text-slate-600 text-xs">—</span>
                       )}
                     </TableCell>
 
