@@ -39,6 +39,11 @@ _BLOCKED_DOMAINS: frozenset[str] = frozenset({
     "veteranstoday.com",     # known disinformation outlet
     "thegatewaypundit.com",  # partisan misinformation
     "breitbart.com",         # highly partisan; poor geopolitical accuracy
+    "beincrypto.com",        # crypto-only outlet; not relevant for geopolitical analysis
+    "cryptobriefing.com",    # crypto-only outlet; not relevant for geopolitical analysis
+    "coindesk.com",          # crypto-only outlet
+    "cointelegraph.com",     # crypto-only outlet
+    "decrypt.co",            # crypto-only outlet
 })
 
 
