@@ -6,6 +6,7 @@ Reusable FastAPI dependencies.
   check_rate_limit  — enforces per-user hourly quota via Redis; also returns User
 """
 
+import logging
 import uuid
 from typing import AsyncGenerator
 
@@ -21,6 +22,7 @@ from georisk_agent.db.client import get_session
 from georisk_agent.db.dal import get_user_by_id
 from georisk_agent.db.models import User
 
+logger = logging.getLogger(__name__)
 _bearer = HTTPBearer()
 
 
@@ -97,6 +99,15 @@ async def check_rate_limit(
         await redis_client.expire(rate_key, 3600)
 
     if count > settings.rate_limit_per_hour:
+        logger.warning(
+            "Rate limit exceeded",
+            extra={
+                "user_id":     str(current_user.id),
+                "count":       count,
+                "limit":       settings.rate_limit_per_hour,
+                "hour_bucket": hour_bucket,
+            },
+        )
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=(

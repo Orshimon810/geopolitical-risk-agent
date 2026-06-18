@@ -21,17 +21,32 @@ import asyncio
 import json
 import logging
 import ssl
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
 import redis as sync_redis
+from langchain_core.callbacks import BaseCallbackHandler
+from langchain_core.outputs import LLMResult
 
 from api.core.query_cache import set_cached_result_sync
 from api.worker.celery_app import celery_app
 from georisk_agent.app.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+class _TokenCounter(BaseCallbackHandler):
+    """Accumulates total token usage across every LLM call in the graph."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.total_tokens: int = 0
+
+    def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
+        usage = (response.llm_output or {}).get("token_usage") or {}
+        self.total_tokens += usage.get("total_tokens", 0)
 
 _TASK_TTL_SECONDS = 86_400  # 24 hours
 
@@ -65,7 +80,14 @@ def _extract_result(values: dict) -> dict[str, Any]:
     return result
 
 
-def _persist_analysis(*, user_id: str, query: str, result: dict[str, Any]) -> None:
+def _persist_analysis(
+    *,
+    user_id: str,
+    query: str,
+    result: dict[str, Any],
+    tokens_used: int | None = None,
+    duration_ms: int | None = None,
+) -> None:
     import concurrent.futures
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
     from georisk_agent.db.dal import save_analysis
@@ -92,6 +114,8 @@ def _persist_analysis(*, user_id: str, query: str, result: dict[str, Any]) -> No
                     query=query,
                     report=result,
                     confidence=result["confidence"],
+                    tokens_used=tokens_used,
+                    duration_ms=duration_ms,
                 )
                 await session.commit()
         finally:
@@ -119,7 +143,10 @@ def run_geopolitical_agent_task(
     r = _sync_redis()
 
     _patch_task_state(r, task_id, {"status": "PROCESSING"})
-    logger.info("Task %s PROCESSING | user=%s | query=%r", task_id, user_id, query[:120])
+    logger.info(
+        "Task A PROCESSING",
+        extra={"task_id": task_id, "user_id": user_id, "query_preview": query[:120]},
+    )
 
     try:
         from georisk_agent.agents.nodes_planner import planner_node
@@ -149,7 +176,10 @@ def run_geopolitical_agent_task(
             patch["portfolio"] = portfolio
 
         _patch_task_state(r, task_id, patch)
-        logger.info("Task %s WAITING_FOR_INPUT | sub_questions=%d", task_id, len(sub_questions))
+        logger.info(
+            "Task A WAITING_FOR_INPUT",
+            extra={"task_id": task_id, "sub_question_count": len(sub_questions)},
+        )
         return {"status": "WAITING_FOR_INPUT", "sub_questions": sub_questions}
 
     except Exception as exc:
@@ -159,7 +189,12 @@ def run_geopolitical_agent_task(
             "error": error_msg,
             "completed_at": datetime.now(timezone.utc).isoformat(),
         })
-        logger.error("Task %s FAILED (planner): %s", task_id, error_msg, exc_info=True)
+        logger.error(
+            "Task A FAILED (planner): %s",
+            error_msg,
+            exc_info=True,
+            extra={"task_id": task_id, "user_id": user_id},
+        )
         raise
 
 
@@ -173,7 +208,10 @@ def resume_geopolitical_agent_task(self, original_task_id: str, user_id: str) ->
     r = _sync_redis()
 
     _patch_task_state(r, original_task_id, {"status": "PROCESSING"})
-    logger.info("Task %s PROCESSING (resume) | user=%s", original_task_id, user_id)
+    logger.info(
+        "Task B PROCESSING",
+        extra={"task_id": original_task_id, "user_id": user_id},
+    )
 
     raw = r.get(f"task:{original_task_id}")
     task_state = json.loads(raw) if raw else {}
@@ -199,7 +237,12 @@ def resume_geopolitical_agent_task(self, original_task_id: str, user_id: str) ->
         if portfolio is not None:
             initial_state["portfolio"] = portfolio
 
-        final_state: dict = graph.invoke(initial_state)
+        counter = _TokenCounter()
+        t0 = time.perf_counter()
+        final_state: dict = graph.invoke(initial_state, config={"callbacks": [counter]})
+        duration_ms = int((time.perf_counter() - t0) * 1000)
+        tokens_used = counter.total_tokens or None
+
         result = _extract_result(final_state)
 
         _patch_task_state(r, original_task_id, {
@@ -208,17 +251,40 @@ def resume_geopolitical_agent_task(self, original_task_id: str, user_id: str) ->
             "completed_at": datetime.now(timezone.utc).isoformat(),
             "cached":       False,
         })
-        logger.info("Task %s SUCCESS (resume)", original_task_id)
+        logger.info(
+            "Task B SUCCESS",
+            extra={
+                "task_id":     original_task_id,
+                "user_id":     user_id,
+                "duration_ms": duration_ms,
+                "tokens_used": tokens_used,
+                "confidence":  result.get("confidence"),
+            },
+        )
 
         # Portfolio results are user-specific — never write them to the shared query cache.
         if portfolio is None:
             set_cached_result_sync(r, query, result, settings.query_cache_ttl_seconds)
 
         try:
-            _persist_analysis(user_id=user_id, query=query, result=result)
-            logger.info("Task %s persisted to analysis_history", original_task_id)
+            _persist_analysis(
+                user_id=user_id,
+                query=query,
+                result=result,
+                tokens_used=tokens_used,
+                duration_ms=duration_ms,
+            )
+            logger.info(
+                "Task B persisted to analysis_history",
+                extra={"task_id": original_task_id, "tokens_used": tokens_used, "duration_ms": duration_ms},
+            )
         except Exception as persist_exc:
-            logger.warning("Task %s DB persist failed (non-fatal): %s", original_task_id, persist_exc, exc_info=True)
+            logger.warning(
+                "Task B DB persist failed (non-fatal): %s",
+                persist_exc,
+                exc_info=True,
+                extra={"task_id": original_task_id},
+            )
 
         return result
 
@@ -229,5 +295,10 @@ def resume_geopolitical_agent_task(self, original_task_id: str, user_id: str) ->
             "error":        error_msg,
             "completed_at": datetime.now(timezone.utc).isoformat(),
         })
-        logger.error("Task %s FAILED (resume): %s", original_task_id, error_msg, exc_info=True)
+        logger.error(
+            "Task B FAILED: %s",
+            error_msg,
+            exc_info=True,
+            extra={"task_id": original_task_id, "user_id": user_id},
+        )
         raise
