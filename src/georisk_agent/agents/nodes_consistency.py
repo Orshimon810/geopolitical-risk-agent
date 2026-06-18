@@ -19,7 +19,7 @@ from pydantic import BaseModel, Field
 
 from georisk_agent.app.config import settings
 from georisk_agent.app.types import DynamicAgentState
-from georisk_agent.agents.verdict_rules import enforce_asset_class_verdicts
+from georisk_agent.agents.verdict_rules import enforce_asset_class_verdicts, detect_takeaway_misalignments
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +59,13 @@ def consistency_validator_node(state: DynamicAgentState) -> DynamicAgentState:
     # Catches VIX-inverse and index-alignment violations that may have slipped
     # through the analysis node (e.g. via the main-call fallback path).
     portfolio_impacts, pre_overrides = enforce_asset_class_verdicts(list(portfolio_impacts))
+
+    # Takeaway alignment: correct Bearish verdicts for tickers the takeaway
+    # explicitly recommends buying (literal ticker match in takeaway text).
+    _takeaway = state.get("investor_takeaway") or []
+    portfolio_impacts, _align_log = detect_takeaway_misalignments(portfolio_impacts, _takeaway)
+    pre_overrides = pre_overrides + _align_log
+
     if pre_overrides:
         logger.info(
             "consistency_validator pre-pass: %d deterministic correction(s): %s",
@@ -108,7 +115,12 @@ def consistency_validator_node(state: DynamicAgentState) -> DynamicAgentState:
         "- Broad market index (^DJI, ^GSPC, SPY, QQQ, etc.) marked Neutral when the holding's "
         "own reasoning field explicitly uses words like 'downward pressure', 'negatively "
         "impacting', 'headwinds', 'decline', or 'sell-off' — that language demands Bearish, "
-        "not Neutral.\n\n"
+        "not Neutral.\n"
+        "- Commodity PRODUCER marked Bearish due to 'margin compression' or 'input cost pressure' "
+        "when the takeaway recommends buying that producer: e.g. takeaway says 'increase exposure "
+        "to lithium miners / buy ALB' but ALB is Bearish. Commodity producers (miners, drillers, "
+        "royalty companies) benefit from commodity price spikes — their revenue rises, not their "
+        "costs. Correct to Bullish and note 'producer misclassified as consumer'.\n\n"
         "=== WHAT IS NOT A CONTRADICTION (DO NOT FLAG) ===\n"
         "- A ticker marked Bearish due to Vector B (e.g. export bans) even though the macro "
         "analysis contains a positive Vector A (e.g. mineral reserves) for a different sector. "

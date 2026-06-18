@@ -6,7 +6,11 @@ from pydantic import BaseModel, Field
 
 from georisk_agent.app.config import settings
 from georisk_agent.app.types import DynamicAgentState, PortfolioHolding
-from georisk_agent.agents.verdict_rules import enforce_asset_class_verdicts, extract_price_benchmarks
+from georisk_agent.agents.verdict_rules import (
+    enforce_asset_class_verdicts,
+    extract_price_benchmarks,
+    detect_takeaway_misalignments,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -214,6 +218,40 @@ Avoid defaulting to "Medium".
 
 
 # -------------------------
+# Commodity shock prompt block
+# -------------------------
+
+COMMODITY_SHOCK_RULE = (
+    "=== COMMODITY SHOCK DIFFERENTIATION (CRITICAL — CLASSIFY BEFORE ASSIGNING VERDICT) ===\n"
+    "When the geopolitical or regulatory event causes a specific commodity price to spike,\n"
+    "classify EACH holding by its supply-chain role BEFORE writing the verdict:\n\n"
+    "COMMODITY PRODUCERS / MINERS / ROYALTY COMPANIES:\n"
+    "  Role: these firms SELL the commodity. A price spike raises revenue and margin on every\n"
+    "  unit sold — their top line grows while their cost base is largely fixed.\n"
+    "  Default verdict: BULLISH. Only Bearish if the disruption directly cuts THEIR OWN output\n"
+    "  (e.g. the mine is in the sanctioned country or a force-majeure shuts their facility).\n"
+    "  Examples: ALB / SQM / LTHM / PLL (Lithium),  XOM / CVX / COP / SLB (Oil & Gas),\n"
+    "            FCX / SCCO / TECK (Copper),  NEM / GOLD / AEM / WPM (Gold/Silver miners),\n"
+    "            MP / LYNAS (Rare Earths),  RIO / BHP / VALE (Diversified miners).\n"
+    "  ❌ COMMON ERROR: do NOT mark a producer Bearish due to 'input cost pressure' or\n"
+    "     'supply disruption' unless the disruption hits THEIR OWN production, not competitors'.\n\n"
+    "COMMODITY CONSUMERS / MANUFACTURERS / END-USERS:\n"
+    "  Role: these firms BUY the commodity as a production input. A price spike compresses\n"
+    "  their margins directly — higher input cost with no corresponding revenue uplift.\n"
+    "  Default verdict: BEARISH due to margin compression and potential operational delays.\n"
+    "  Examples: TSLA / RIVN / F / GM / BMW (Lithium/Battery consumers),\n"
+    "            Airlines / UPS / AMZN (Fuel/energy consumers),\n"
+    "            AAPL / DELL / HPQ / MSFT (Chip/component consumers),\n"
+    "            Steel mills / auto OEMs (Metal consumers).\n"
+    "  ❌ COMMON ERROR: do NOT mark a consumer Bullish just because the underlying commodity\n"
+    "     is geopolitically significant — significance ≠ margin tailwind for the buyer.\n\n"
+    "CLASSIFICATION STEP (mandatory): For each holding, write 'Role: Producer' or\n"
+    "'Role: Consumer' (or 'Role: Mixed/Vertically-integrated') at the start of the\n"
+    "reasoning field before writing the verdict. If uncertain, default to Consumer."
+)
+
+
+# -------------------------
 # Helpers
 # -------------------------
 
@@ -330,6 +368,7 @@ def _run_portfolio_analysis(
     market_impacts: list[str],
     signals_block: str,
     impact_vectors: list[str],
+    investor_takeaway: list[str],
 ) -> list[PortfolioHoldingImpact]:
     """
     PHASE 2: Focused LLM call that maps macro impact vectors onto individual holdings.
@@ -350,6 +389,19 @@ def _run_portfolio_analysis(
         if impact_vectors
         else "  (no specific vectors extracted — use macro impacts above as guide)"
     )
+    takeaway_constraint = ""
+    if investor_takeaway:
+        takeaway_lines = "\n".join(f"  {i + 1}. {t}" for i, t in enumerate(investor_takeaway))
+        takeaway_constraint = (
+            "=== INVESTOR TAKEAWAY ALIGNMENT (BINDING CONSTRAINT) ===\n"
+            "Phase 1 macro analysis produced these investor recommendations:\n"
+            f"{takeaway_lines}\n\n"
+            "BINDING RULE: A holding MUST NOT be marked Bearish with High confidence if the\n"
+            "takeaway above explicitly recommends buying, increasing, or gaining exposure to it\n"
+            "or its sector. If you are about to assign Bearish to a holding that the takeaway\n"
+            "recommends buying, STOP — you have likely misclassified a commodity PRODUCER as a\n"
+            "CONSUMER. Re-read the COMMODITY SHOCK DIFFERENTIATION rule and revise.\n"
+        )
 
     prompt = (
         "You are a geopolitical risk analyst performing PHASE 2: Portfolio Impact Mapping.\n"
@@ -390,6 +442,7 @@ def _run_portfolio_analysis(
         "=== VECTOR-MAPPING RULE ===\n"
         "- Direction must match the dominant vector: [Bearish] vector → Bearish verdict.\n"
         "- Name the specific vector, its theme, and any opposing vector in the reasoning.\n\n"
+        f"{COMMODITY_SHOCK_RULE}\n\n"
         "=== SPECIAL ASSET CLASS RULES (NON-NEGOTIABLE) ===\n"
         "VIX / Volatility Index (ticker: ^VIX or VIX):\n"
         "  The VIX measures implied equity volatility and moves INVERSELY to equities.\n"
@@ -412,6 +465,7 @@ def _run_portfolio_analysis(
         "    verdict MUST be Bullish, not Neutral.\n"
         "  Neutral on a broad index is only valid when the macro outlook is genuinely balanced\n"
         "  with offsetting forces of equal magnitude.\n\n"
+        f"{takeaway_constraint}\n"
         f"Assess EXACTLY these {len(portfolio)} investment holdings in the order listed:\n"
         f"{holdings_lines}\n\n"
         f"Return exactly {len(portfolio)} entries. "
@@ -623,6 +677,7 @@ Permitted sources (retrieved for this query):
             market_impacts=market_impacts,
             signals_block=signals_block,
             impact_vectors=impact_vectors,
+            investor_takeaway=investor_takeaway,
         )
 
         if dedicated_impacts:
@@ -661,6 +716,19 @@ Permitted sources (retrieved for this query):
             logger.info(
                 "analysis_node: deterministic enforcement applied %d correction(s): %s",
                 len(enforcement_log), enforcement_log,
+            )
+
+    # Takeaway alignment — if the investor_takeaway explicitly mentions a ticker
+    # alongside a positive signal ("buy ALB", "increase SQM exposure"), that
+    # holding cannot remain Bearish.
+    if portfolio_impacts and investor_takeaway:
+        portfolio_impacts, alignment_log = detect_takeaway_misalignments(
+            portfolio_impacts, investor_takeaway
+        )
+        if alignment_log:
+            logger.info(
+                "analysis_node: takeaway-alignment corrected %d holding(s): %s",
+                len(alignment_log), alignment_log,
             )
 
     # -------------------------

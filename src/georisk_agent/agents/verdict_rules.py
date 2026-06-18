@@ -1,11 +1,15 @@
 """
 Deterministic verdict-enforcement rules and query-benchmark extraction.
 
-Two functions are exported and called from both nodes_analysis and
+Three functions are exported and called from both nodes_analysis and
 nodes_consistency so the same logic is never duplicated:
 
   enforce_asset_class_verdicts(impacts) — post-process serialised portfolio
       dicts; corrects VIX inverse and index-alignment violations without an LLM.
+
+  detect_takeaway_misalignments(impacts, investor_takeaway) — scans the
+      investor_takeaway bullets for explicit buy/increase signals adjacent to a
+      portfolio ticker and corrects any Bearish verdict for that ticker.
 
   extract_price_benchmarks(query) — regex scan for explicit price anchors in
       the user query (e.g. "Brent spikes past $110/bbl") used as scenario
@@ -132,6 +136,102 @@ def enforce_asset_class_verdicts(
                 logger.info("verdict_rules: %s", msg)
 
         result.append(p)
+
+    return result, overrides
+
+
+# ---------------------------------------------------------------------------
+# Takeaway → portfolio alignment
+# ---------------------------------------------------------------------------
+
+# Words in an investor_takeaway bullet that signal a positive/buy recommendation.
+_POSITIVE_SIGNALS: frozenset[str] = frozenset({
+    "buy",
+    "increase",
+    "overweight",
+    "accumulate",
+    "rotate into",
+    "add",
+    "long",
+    "gain exposure",
+    "increase exposure",
+    "increase allocation",
+    "increase position",
+    "favorable",
+    "bullish on",
+    "bullish for",
+    "upside",
+    "add exposure",
+})
+
+
+def detect_takeaway_misalignments(
+    impacts: list[dict],
+    investor_takeaway: list[str],
+) -> tuple[list[dict], list[str]]:
+    """
+    Detect and correct Bearish verdicts for holdings that the investor_takeaway
+    explicitly recommends buying or increasing (matched by literal ticker symbol).
+
+    Algorithm:
+      For each takeaway bullet that contains a positive signal word, scan for
+      a portfolio ticker by word-boundary regex.  If the matching holding is
+      currently Bearish, correct it to Bullish and annotate the reasoning.
+
+    Scope: this function handles only *explicit ticker mentions* in the takeaway.
+    Semantic cases (e.g. "buy lithium miners" → ALB) are handled by the portfolio
+    LLM prompt (COMMODITY SHOCK DIFFERENTIATION + TAKEAWAY ALIGNMENT CONSTRAINT)
+    and the consistency validator LLM.
+
+    Returns:
+        (corrected_impacts, override_log)
+    """
+    if not investor_takeaway or not impacts:
+        return impacts, []
+
+    overrides: list[str] = []
+
+    # Build ticker → index map (upper-cased for case-insensitive matching).
+    ticker_to_idx: dict[str, int] = {
+        (p.get("ticker") or "").upper(): i
+        for i, p in enumerate(impacts)
+        if p.get("ticker")
+    }
+
+    # Find holdings that the takeaway positively recommends (by ticker mention).
+    buy_recommended: set[int] = set()
+    for bullet in investor_takeaway:
+        bullet_lower = bullet.lower()
+        if not any(sig in bullet_lower for sig in _POSITIVE_SIGNALS):
+            continue
+        for ticker_upper, idx in ticker_to_idx.items():
+            # Word-boundary match prevents "ALB" from matching "ALBA" or "ALBANY".
+            if re.search(r'\b' + re.escape(ticker_upper) + r'\b', bullet, re.IGNORECASE):
+                buy_recommended.add(idx)
+
+    if not buy_recommended:
+        return impacts, []
+
+    result: list[dict] = [dict(p) for p in impacts]
+    for idx in buy_recommended:
+        p = result[idx]
+        if p.get("verdict") == "Bearish":
+            old = "Bearish"
+            p["verdict"] = "Bullish"
+            p["reasoning"] = (
+                "[Takeaway-alignment correction] "
+                + p.get("reasoning", "")
+                + " The investor takeaway explicitly recommends increasing exposure to "
+                "this ticker; a Bearish verdict contradicts that guidance. Likely cause: "
+                "commodity producer misclassified as a consumer — producers benefit from "
+                "commodity price spikes, not suffer from them."
+            ).strip()
+            msg = (
+                f"Takeaway alignment: {p.get('ticker')} {old} → Bullish "
+                "(takeaway explicitly recommends buying this ticker)"
+            )
+            overrides.append(msg)
+            logger.info("verdict_rules: %s", msg)
 
     return result, overrides
 
