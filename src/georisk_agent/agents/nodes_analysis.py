@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 
 from georisk_agent.app.config import settings
 from georisk_agent.app.types import DynamicAgentState, PortfolioHolding
+from georisk_agent.agents.verdict_rules import enforce_asset_class_verdicts, extract_price_benchmarks
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +182,20 @@ STRICTLY FORBIDDEN scenarios:
 - Any scenario that omits specific figures, timelines, or mechanisms.
 REQUIRED: quantitative ranges (e.g., "oil +15-20% to $95/bbl over 3 months"),
 named triggers, and clear transmission paths.
+
+=== SCENARIO PRICE BASELINE HIERARCHY (NON-NEGOTIABLE) ===
+When computing price targets or percentage moves in scenarios, apply this priority order:
+Priority 1 — EXPLICIT QUERY BENCHMARK: If the user's question names a hypothetical
+  price (e.g., "Brent crude spikes past $110/bbl", "oil hits $120", "gold at $2,600/oz"),
+  that figure IS the scenario starting baseline, not the live market price.
+  - Base case: project from the stated level (e.g., "Brent stabilises at $108-115/bbl").
+  - Escalation case: project FURTHER in the same direction (e.g., "$130-145/bbl").
+  Do NOT calculate escalation as "X% above the live price of $78" when an explicit
+  anchor of $110 appears in the query — that anchor supersedes the live feed.
+Priority 2 — LIVE MARKET PRICE: Use the live ticker only when the query contains
+  no explicit hypothetical price target for that commodity or index.
+Any mandated baselines found in the query will be highlighted in the prompt under
+"MANDATED PRICE BASELINES" — treat those figures as non-negotiable anchors.
 
 Investor takeaway discipline:
 - Every recommendation must name a destination asset, not just an exit.
@@ -380,7 +395,12 @@ def _run_portfolio_analysis(
         "  The VIX measures implied equity volatility and moves INVERSELY to equities.\n"
         "  - Bearish/risk-off macro outlook → VIX verdict MUST be Bullish (fear rises).\n"
         "  - Bullish/risk-on macro outlook  → VIX verdict should be Bearish (complacency).\n"
-        "  A Bearish market outlook paired with a Bearish VIX verdict is a logical contradiction.\n"
+        "  Cross-holding check: scan every other holding in this SAME portfolio batch. "
+        "If ANY equity, index (^DJI, SPY, QQQ), or mega-cap (AAPL, NVDA, etc.) is assessed "
+        "as Bearish, that is definitive evidence of risk-off conditions — VIX MUST be Bullish. "
+        "Do NOT assign Bearish or Neutral to VIX if other holdings in this batch are Bearish.\n"
+        "  A Bearish market + Bearish VIX is a fatal logical contradiction that will be "
+        "auto-corrected downstream — avoid it at the source.\n"
         "  Do not apply normal vector mapping to VIX — apply inverse logic instead.\n\n"
         "Broad Market Indices (^DJI, ^GSPC, ^SPX, ^IXIC, SPY, QQQ, IWM, etc.):\n"
         "  These indices move with overall equity sentiment — they cannot be Neutral when you\n"
@@ -479,6 +499,24 @@ def analysis_node(state: DynamicAgentState) -> DynamicAgentState:
 
     source_list = "\n".join(f"  - {s}" for s in actual_sources) if actual_sources else "  (no sources retrieved)"
 
+    # Explicit price anchors stated in the query (e.g. "Brent spikes past $110/bbl").
+    # These override the live feed as the scenario projection baseline.
+    benchmarks = extract_price_benchmarks(query)
+    benchmark_block = ""
+    if benchmarks:
+        items = "\n".join(
+            f"  - {asset}: {price} "
+            "(user-specified hypothetical — use as scenario baseline, NOT the live price)"
+            for asset, price in benchmarks.items()
+        )
+        benchmark_block = (
+            "\nMANDATED PRICE BASELINES (extracted from query — non-negotiable anchors):\n"
+            + items
+            + "\nBase case: project from these levels. "
+            "Escalation case: project further in the same direction.\n"
+        )
+        logger.info("analysis_node: price benchmarks extracted: %s", benchmarks)
+
     # Build portfolio block for the main prompt (fallback path)
     portfolio_block = ""
     if portfolio:
@@ -507,6 +545,7 @@ Evidence:
 {coverage_line}
 
 {signals_block}
+{benchmark_block}
 {portfolio_block}
 
 Structural rules:
@@ -612,6 +651,17 @@ Permitted sources (retrieved for this query):
                 )
                 placeholders = _correct_tickers([], portfolio)
                 portfolio_impacts = [p.model_dump() for p in placeholders]
+
+    # Deterministic enforcement — applied after ALL LLM passes so it catches
+    # any remaining VIX-inverse or index-alignment violations regardless of
+    # which path (dedicated, fallback, or placeholder) produced the impacts.
+    if portfolio_impacts:
+        portfolio_impacts, enforcement_log = enforce_asset_class_verdicts(portfolio_impacts)
+        if enforcement_log:
+            logger.info(
+                "analysis_node: deterministic enforcement applied %d correction(s): %s",
+                len(enforcement_log), enforcement_log,
+            )
 
     # -------------------------
     # Defensive fallbacks for main analysis fields
