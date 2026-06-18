@@ -50,17 +50,7 @@ class AnalysisOutput(BaseModel):
     impact_vectors: list[str] = Field(
         default_factory=list,
         description=(
-            "PHASE 1 OUTPUT — Atomic query decomposition + directional macro impact vectors.\n"
-            "Step 1: Identify ALL distinct themes/sectors explicitly or implicitly in the query "
-            "(e.g., 'Theme A: Fintech/Payments | Theme B: Defense/Cybersecurity | Theme C: Energy').\n"
-            "Step 2: Generate vectors for EACH theme independently — at least one per theme. "
-            "Do not let one dominant theme crowd out others.\n"
-            "Step 3: Prefix each vector with '[Bullish]' or '[Bearish]' AND a theme tag. "
-            "Examples: '[Bearish][Payments] Western processors lose BRICS market share', "
-            "'[Bullish][Defense] Accelerated NATO budgets boost aerospace/satellite contractors', "
-            "'[Bearish][Energy] European gas dependency amplifies price volatility'.\n"
-            "Generate 4-8 vectors spanning all identified themes. "
-            "Missing coverage of any query theme is a quality defect — fix it."
+            "PHASE 1 OUTPUT — Concise directional macro impact vectors."
             "Each vector must be prefixed with '[Bullish]' or '[Bearish]' and name the "
             "affected sector/commodity/asset class and the mechanism. "
             "Examples: '[Bearish] Rising fuel costs pressure energy-intensive transport sectors', "
@@ -161,17 +151,10 @@ Explain clearly:
 - transmission mechanisms step by step
 - plausible timelines for first-order vs second-order effects
 
-=== IMPACT VECTORS (impact_vectors) — ATOMIC DECOMPOSITION REQUIRED ===
-Before extracting vectors, explicitly deconstruct the query into ALL constituent themes:
-  Step 1 — List every sector, industry, or asset class explicitly or implicitly referenced.
-            Example: "Theme A: Fintech/Payments | Theme B: Defense/Cybersecurity | Theme C: Commodities"
-  Step 2 — Generate at least one [Bullish] or [Bearish] vector per identified theme, independently.
-            Do NOT let the dominant theme absorb all vectors — secondary themes must produce their own vectors.
-  Step 3 — Label each vector with its theme tag, e.g.:
-            "[Bearish][Payments] Western processors lose BRICS market share as SWIFT alternative scales"
-            "[Bullish][Defense] Accelerated NATO budgets benefit aerospace, satellite, and cyber contractors"
-            "[Bearish][Energy] European import dependency amplifies gas price volatility"
-Generate 4-8 vectors total, covering all identified themes. Thin coverage of any theme is a quality defect.
+=== IMPACT VECTORS (impact_vectors) ===
+After completing Phase 1 reasoning, extract 3-6 concise directional impact vectors.
+Each vector becomes the bridge between your macro findings and individual portfolio holdings.
+Be specific: name the sector/instrument and the direction.
 
 === SCENARIO QUALITY (NON-NEGOTIABLE) ===
 Every scenario must include concrete, measurable projections.
@@ -345,28 +328,17 @@ def _run_portfolio_analysis(
         "=== MACRO IMPACT VECTORS (from Phase 1) ===\n"
         "These are the directional forces this geopolitical event creates:\n"
         f"{vectors_block}\n\n"
-        "=== MULTI-VECTOR PORTFOLIO MATCH (CRITICAL) ===\n"
-        "The impact vectors above span MULTIPLE themes (e.g., Payments, Defense, Energy). "
-        "Evaluate each holding against EVERY vector across ALL themes — not just the primary theme.\n"
-        "- A ticker may be Neutral for Theme A but Bullish/Bearish for Theme B. "
-        "If it matches ANY vector, it gets that verdict — not Neutral.\n"
-        "- Example: a defense/aerospace ETF has zero exposure to payment processing (Theme A) "
-        "but clear exposure to accelerated NATO defense budgets (Theme B). "
-        "It must be marked Bullish with reasoning: 'Bullish — High indirect exposure. "
-        "While isolated from payment sector disruption, the company directly benefits from "
-        "accelerated Western defense spending driven by this geopolitical fragmentation.' "
-        "Marking it Neutral because it misses Theme A is a scoring error.\n\n"
-        "=== ZERO-IMPACT / HONEST NEUTRAL RULE ===\n"
-        "- Only mark Neutral when the ticker has NO meaningful exposure to ANY of the vectors "
-        "across ALL themes listed above.\n"
-        "- Do NOT invent supply-chain excuses to force a directional verdict — but equally, "
-        "do NOT dismiss a real vector match just because it comes from a secondary theme.\n"
-        "- Neutral reasoning must be specific: 'Neutral — No exposure to [Theme A: payments], "
-        "[Theme B: defense], or [Theme C: energy]. Core business is [X].' \n\n"
+        "=== ZERO-IMPACT / HONEST NEUTRAL RULE (CRITICAL) ===\n"
+        "- For each holding, first check whether the company has direct or meaningful indirect "
+        "exposure to ANY of the impact vectors listed above.\n"
+        "- If it does NOT: classify it as Neutral. Do NOT invent supply-chain excuses or "
+        "far-fetched second-order links just to produce a directional verdict.\n"
+        "- Neutral reasoning must be honest and concise, e.g.: 'Neutral — No direct exposure. "
+        "Core business operates domestically and is isolated from [specific shock].' \n\n"
         "=== VECTOR-MAPPING RULE ===\n"
-        "- Only assign Bullish or Bearish if a clear vector alignment exists (from any theme).\n"
-        "- Direction must match the vector: [Bearish] vector → Bearish verdict.\n"
-        "- Name the specific vector and its theme in the reasoning field.\n\n"
+        "- Only assign Bullish or Bearish if a clear, direct vector alignment exists.\n"
+        "- The direction MUST match the vector: if the vector is [Bearish], the verdict must be Bearish.\n"
+        "- Name the specific vector that justifies the verdict in the reasoning field.\n\n"
         f"Assess EXACTLY these {len(portfolio)} investment holdings in the order listed:\n"
         f"{holdings_lines}\n\n"
         f"Return exactly {len(portfolio)} entries. "
