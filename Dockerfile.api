@@ -18,6 +18,11 @@ COPY src ./src
 
 RUN pip install --upgrade pip && pip install .
 
+# Pre-create the yfinance timezone cache directory so that concurrent Celery
+# prefork workers do not race on os.makedirs() at first use and log a spurious
+# "Failed to create TzCache [Errno 17] File exists" warning.
+RUN mkdir -p /root/.cache/py-yfinance
+
 # Copy the rest of the application
 COPY api ./api
 COPY scripts ./scripts
