@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from georisk_agent.app.config import settings
 from georisk_agent.app.types import DynamicAgentState
+from georisk_agent.agents.verdict_rules import enforce_asset_class_verdicts
 
 logger = logging.getLogger(__name__)
 
@@ -54,11 +55,21 @@ def consistency_validator_node(state: DynamicAgentState) -> DynamicAgentState:
     if not portfolio_impacts:
         return state
 
+    # Pre-pass: deterministic enforcement before LLM validation.
+    # Catches VIX-inverse and index-alignment violations that may have slipped
+    # through the analysis node (e.g. via the main-call fallback path).
+    portfolio_impacts, pre_overrides = enforce_asset_class_verdicts(list(portfolio_impacts))
+    if pre_overrides:
+        logger.info(
+            "consistency_validator pre-pass: %d deterministic correction(s): %s",
+            len(pre_overrides), pre_overrides,
+        )
+
     investor_takeaway = state.get("investor_takeaway") or []
     market_impacts = state.get("market_impacts") or []
 
     if not investor_takeaway and not market_impacts:
-        return state
+        return {**state, "portfolio_impacts": portfolio_impacts}
 
     holdings_block = "\n".join(
         f"  • {p.get('ticker', '?')} ({p.get('name', '')}): "
@@ -88,12 +99,16 @@ def consistency_validator_node(state: DynamicAgentState) -> DynamicAgentState:
         "- Takeaway: 'Reduce exposure to shipping equities' → shipping stock marked Bullish\n"
         "- Market impact: 'Oil exporters benefit from price spike' → oil ETF marked Bearish\n"
         "- Takeaway: 'Rotate into defense stocks' → defense ETF marked Bearish\n"
-        "- VIX (^VIX) marked Bearish when the macro outlook / market impacts are risk-off or "
-        "Bearish (VIX moves inversely to equities — a Bearish market means higher volatility = "
-        "Bullish VIX). A Bearish market + Bearish VIX is always a contradiction.\n"
+        "- VIX (^VIX) marked Bearish or Neutral when the market outlook is risk-off: "
+        "(a) market impacts describe broad equity losses or volatility surge, OR "
+        "(b) another holding in the SAME PORTFOLIO TABLE is already marked Bearish "
+        "(e.g. ^DJI Bearish, AAPL Bearish, SPY Bearish). "
+        "VIX moves inversely to equities — a Bearish equity environment always means "
+        "Bullish VIX. A Bearish market + Bearish/Neutral VIX is a fatal contradiction.\n"
         "- Broad market index (^DJI, ^GSPC, SPY, QQQ, etc.) marked Neutral when the holding's "
         "own reasoning field explicitly uses words like 'downward pressure', 'negatively "
-        "impacting', 'headwinds', 'decline', or 'sell-off' — that language demands Bearish.\n\n"
+        "impacting', 'headwinds', 'decline', or 'sell-off' — that language demands Bearish, "
+        "not Neutral.\n\n"
         "=== WHAT IS NOT A CONTRADICTION (DO NOT FLAG) ===\n"
         "- A ticker marked Bearish due to Vector B (e.g. export bans) even though the macro "
         "analysis contains a positive Vector A (e.g. mineral reserves) for a different sector. "
@@ -123,9 +138,14 @@ def consistency_validator_node(state: DynamicAgentState) -> DynamicAgentState:
         logger.info("Consistency validator: no contradictions — all verdicts aligned")
         return {
             **state,
+            "portfolio_impacts": portfolio_impacts,   # keep pre-pass corrections
             "debug": {
                 **(state.get("debug") or {}),
-                "consistency_check": {"contradictions_found": False, "summary": output.summary},
+                "consistency_check": {
+                    "contradictions_found": False,
+                    "summary": output.summary,
+                    "pre_pass_overrides": pre_overrides,
+                },
             },
         }
 
@@ -157,6 +177,9 @@ def consistency_validator_node(state: DynamicAgentState) -> DynamicAgentState:
         "portfolio_impacts": corrected_impacts,
         "debug": {
             **(state.get("debug") or {}),
-            "consistency_check": output.model_dump(),
+            "consistency_check": {
+                **output.model_dump(),
+                "pre_pass_overrides": pre_overrides,
+            },
         },
     }
