@@ -6,6 +6,10 @@ from georisk_agent.agents.nodes_analysis import AnalysisOutput
 
 VALID_OUTPUT = {
     "reasoning": "Oil shock transmits via inflation expectations to bonds first, then equities.",
+    "impact_vectors": [
+        "[Bearish] Rising crude prices pressure energy-intensive transport sectors",
+        "[Bullish] Oil exporters benefit from price spike — sovereign funds accumulate",
+    ],
     "market_impacts": ["Oil prices surge 15-20% on supply disruption"],
     "risks": ["Market underestimates escalation speed and containment failure"],
     "scenarios": [
@@ -54,3 +58,15 @@ def test_model_dump_is_serializable():
     dumped = output.model_dump()
     assert dumped["confidence"] == "Medium"
     assert isinstance(dumped["market_impacts"], list)
+
+
+def test_impact_vectors_defaults_to_empty_list():
+    data = {k: v for k, v in VALID_OUTPUT.items() if k != "impact_vectors"}
+    output = AnalysisOutput(**data)
+    assert output.impact_vectors == []
+
+
+def test_impact_vectors_populated():
+    output = AnalysisOutput(**VALID_OUTPUT)
+    assert len(output.impact_vectors) == 2
+    assert all(isinstance(v, str) for v in output.impact_vectors)

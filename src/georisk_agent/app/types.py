@@ -103,5 +103,9 @@ class DynamicAgentState(TypedDict, total=False):
     portfolio_impacts: Optional[List[Dict[str, Any]]]
     # Serialised PortfolioHoldingImpact dicts; populated by analysis_node
 
+    impact_vectors: Optional[List[str]]
+    # Directional macro vectors extracted by analysis_node (e.g. "[Bullish] Defense spend surge")
+    # Passed to portfolio analysis and consistency validator.
+
     # ── Internal routing (stripped by final_output_node) ─────────────
     reviewer_verdict: str           # "PASS" | "RETRY"
