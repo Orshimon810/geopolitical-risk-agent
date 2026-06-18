@@ -16,15 +16,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from api.core.log_config import configure_json_logging
 from api.core.redis_client import close_redis, get_redis
 from api.routers import agent, auth, portfolio
 from georisk_agent.app.config import settings
 from georisk_agent.db.client import close_engine, get_engine
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-)
+configure_json_logging()
 logger = logging.getLogger(__name__)
 
 
