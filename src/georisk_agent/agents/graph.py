@@ -26,6 +26,7 @@ from georisk_agent.agents.nodes_planner import planner_node
 from georisk_agent.agents.nodes_rag_research import rag_research_node
 from georisk_agent.agents.nodes_signals import signals_node
 from georisk_agent.agents.nodes_analysis import analysis_node
+from georisk_agent.agents.nodes_consistency import consistency_validator_node
 from georisk_agent.agents.nodes_reviewer import reviewer_node, MAX_RETRIES_DEFAULT
 
 
@@ -47,15 +48,17 @@ def final_output_node(state: DynamicAgentState) -> DynamicAgentState:
 
 def _add_rag_to_end(graph: StateGraph) -> None:
     """Wire the shared rag_research → … → END edges onto a StateGraph."""
-    graph.add_node("rag_research", rag_research_node)
-    graph.add_node("signals",      signals_node)
-    graph.add_node("analysis",     analysis_node)
-    graph.add_node("reviewer",     reviewer_node)
-    graph.add_node("final_output", final_output_node)
+    graph.add_node("rag_research",         rag_research_node)
+    graph.add_node("signals",              signals_node)
+    graph.add_node("analysis",             analysis_node)
+    graph.add_node("consistency_validator", consistency_validator_node)
+    graph.add_node("reviewer",             reviewer_node)
+    graph.add_node("final_output",         final_output_node)
 
-    graph.add_edge("rag_research", "signals")
-    graph.add_edge("signals",      "analysis")
-    graph.add_edge("analysis",     "reviewer")
+    graph.add_edge("rag_research",          "signals")
+    graph.add_edge("signals",               "analysis")
+    graph.add_edge("analysis",              "consistency_validator")
+    graph.add_edge("consistency_validator", "reviewer")
     graph.add_conditional_edges(
         "reviewer",
         should_continue,
