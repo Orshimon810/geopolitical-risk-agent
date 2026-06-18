@@ -47,14 +47,37 @@ class AnalysisOutput(BaseModel):
             "This field is for reasoning only and will not be shown to users."
         )
     )
+    impact_vectors: list[str] = Field(
+        default_factory=list,
+        description=(
+            "PHASE 1 OUTPUT — Concise directional macro impact vectors."
+            "Each vector must be prefixed with '[Bullish]' or '[Bearish]' and name the "
+            "affected sector/commodity/asset class and the mechanism. "
+            "Examples: '[Bearish] Rising fuel costs pressure energy-intensive transport sectors', "
+            "'[Bullish] Higher defense budgets benefit aerospace and cybersecurity contractors', "
+            "'[Bearish] Dollar strength compresses EM sovereign debt capacity'. "
+            "Generate 3-6 vectors. These will be used in Phase 2 to map macro findings onto "
+            "individual portfolio holdings — so be specific about which sectors and directions."
+        )
+    )
     market_impacts: list[str] = Field(
-        description="Asset-level market impact bullets. Identify which asset class reprices first and trace the transmission sequence."
+        description=(
+            "PHASE 1: Global macro asset-level impacts. Focus on sectors, asset classes, "
+            "and markets — NOT on any individual portfolio tickers. "
+            "Identify which asset class reprices first and trace the transmission sequence."
+        )
     )
     risks: list[str] = Field(
         description="Market mispricing risks — what the market believes and why that belief may be wrong."
     )
     scenarios: list[str] = Field(
-        description="Exactly 2 entries: 'Base case: ...' and 'Escalation case: ...' with timelines."
+        description=(
+            "Exactly 2 entries: 'Base case: ...' and 'Escalation case: ...'. "
+            "Each MUST contain specific quantitative projections (percentages, price ranges, timelines). "
+            "FORBIDDEN: vague placeholders like 'conditions evolve without triggering systemic repricing'. "
+            "REQUIRED format per scenario: (a) primary trigger, (b) transmission mechanism, "
+            "(c) specific projections e.g. 'oil +15-20% to $95/bbl', 'd) 3-12 month timeline."
+        )
     )
     investor_takeaway: list[str] = Field(
         description=(
@@ -111,8 +134,10 @@ _portfolio_llm = _llm.with_structured_output(PortfolioAnalysisOutput)
 MARKET_INSIGHT_RULES = """
 Provide concrete market intelligence suitable for institutional investors.
 
-Always reference specific asset classes when relevant.
-Avoid vague phrases like "markets may react".
+=== PHASE 1: MACRO-ECONOMIC ANALYSIS (market_impacts, risks, scenarios, investor_takeaway) ===
+Evaluate global winners, losers, and sectors based purely on the geopolitical event and retrieved evidence.
+Do NOT reference the user's specific portfolio tickers in any Phase 1 field.
+Focus on: sectors, asset classes, commodities, regional markets, currency effects, policy transmission.
 
 Before drawing any conclusion:
 - Trace the full causal sequence (A → B → C) before stating what reprices.
@@ -125,6 +150,20 @@ Explain clearly:
 - which assets move first and why
 - transmission mechanisms step by step
 - plausible timelines for first-order vs second-order effects
+
+=== IMPACT VECTORS (impact_vectors) ===
+After completing Phase 1 reasoning, extract 3-6 concise directional impact vectors.
+Each vector becomes the bridge between your macro findings and individual portfolio holdings.
+Be specific: name the sector/instrument and the direction.
+
+=== SCENARIO QUALITY (NON-NEGOTIABLE) ===
+Every scenario must include concrete, measurable projections.
+STRICTLY FORBIDDEN scenarios:
+- "Base case: Conditions evolve without triggering systemic repricing."
+- "Escalation case: A geopolitical shock drives rapid global risk-off behavior."
+- Any scenario that omits specific figures, timelines, or mechanisms.
+REQUIRED: quantitative ranges (e.g., "oil +15-20% to $95/bbl over 3 months"),
+named triggers, and clear transmission paths.
 
 Investor takeaway discipline:
 - Every recommendation must name a destination asset, not just an exit.
@@ -258,10 +297,13 @@ def _run_portfolio_analysis(
     query: str,
     market_impacts: list[str],
     signals_block: str,
+    impact_vectors: list[str],
 ) -> list[PortfolioHoldingImpact]:
     """
-    Focused LLM call that produces per-holding impact assessments.
-    Isolated from the main analysis so the model has exactly one task.
+    PHASE 2: Focused LLM call that maps macro impact vectors onto individual holdings.
+
+    Uses the impact_vectors extracted from Phase 1 (macro analysis) as the bridge.
+    Enforces the Zero-Impact/Honest Neutral rule and the Vector-Mapping rule.
     Returns corrected entries (ticker/name guaranteed to match input portfolio).
     """
     holdings_lines = "\n".join(
@@ -271,20 +313,36 @@ def _run_portfolio_analysis(
     )
     impacts_lines = "\n".join(f"- {m}" for m in market_impacts[:4])
     signals_section = ("Market signals:\n" + signals_block) if signals_block else ""
+    vectors_block = (
+        "\n".join(f"  {v}" for v in impact_vectors)
+        if impact_vectors
+        else "  (no specific vectors extracted — use macro impacts above as guide)"
+    )
 
     prompt = (
-        "You are a geopolitical risk analyst assessing the impact of a specific situation "
-        "on a user's personal investment holdings.\n\n"
+        "You are a geopolitical risk analyst performing PHASE 2: Portfolio Impact Mapping.\n"
+        "Your task: map the macro findings from Phase 1 onto each specific holding.\n\n"
         f"Geopolitical context:\n{query}\n\n"
-        f"Key market impacts already identified:\n{impacts_lines}\n\n"
+        f"Phase 1 macro impacts:\n{impacts_lines}\n\n"
         f"{signals_section}\n\n"
+        "=== MACRO IMPACT VECTORS (from Phase 1) ===\n"
+        "These are the directional forces this geopolitical event creates:\n"
+        f"{vectors_block}\n\n"
+        "=== ZERO-IMPACT / HONEST NEUTRAL RULE (CRITICAL) ===\n"
+        "- For each holding, first check whether the company has direct or meaningful indirect "
+        "exposure to ANY of the impact vectors listed above.\n"
+        "- If it does NOT: classify it as Neutral. Do NOT invent supply-chain excuses or "
+        "far-fetched second-order links just to produce a directional verdict.\n"
+        "- Neutral reasoning must be honest and concise, e.g.: 'Neutral — No direct exposure. "
+        "Core business operates domestically and is isolated from [specific shock].' \n\n"
+        "=== VECTOR-MAPPING RULE ===\n"
+        "- Only assign Bullish or Bearish if a clear, direct vector alignment exists.\n"
+        "- The direction MUST match the vector: if the vector is [Bearish], the verdict must be Bearish.\n"
+        "- Name the specific vector that justifies the verdict in the reasoning field.\n\n"
         f"Assess EXACTLY these {len(portfolio)} investment holdings in the order listed:\n"
         f"{holdings_lines}\n\n"
-        f"Rules:\n"
-        f"- Return exactly {len(portfolio)} entries in the impacts list.\n"
-        "- Use the EXACT ticker and name values shown above — do not substitute or add holdings.\n"
-        "- For each entry: verdict (Bullish/Bearish/Neutral), short_term_impact, "
-        "long_term_impact, confidence (Low/Medium/High), reasoning specific to that holding."
+        f"Return exactly {len(portfolio)} entries. "
+        "Use the EXACT ticker and name values shown. Do not substitute or add holdings."
     )
 
     try:
@@ -440,6 +498,7 @@ Permitted sources (retrieved for this query):
     scenarios         = output.scenarios
     investor_takeaway = output.investor_takeaway
     confidence        = output.confidence
+    impact_vectors    = output.impact_vectors or []
 
     # Use actual retrieved source names — LLM frequently hallucinates outlet names
     # (e.g. "BelnCrypto", "Yahoo Finance") when the real sources are corpus PDFs.
@@ -471,6 +530,7 @@ Permitted sources (retrieved for this query):
             query=query,
             market_impacts=market_impacts,
             signals_block=signals_block,
+            impact_vectors=impact_vectors,
         )
 
         if dedicated_impacts:
@@ -516,8 +576,8 @@ Permitted sources (retrieved for this query):
 
     if len(scenarios) < 2:
         scenarios = [
-            "Base case: Conditions evolve without triggering systemic repricing.",
-            "Escalation case: A geopolitical shock drives rapid global risk-off behavior.",
+            "Base case: Evidence was insufficient to produce a specific projection — monitor primary trigger indicators for 30-60 day directional signal.",
+            "Escalation case: Evidence was insufficient to produce a specific projection — elevated tail risk warrants defensive positioning until clearer evidence emerges.",
         ]
 
     if not investor_takeaway:
@@ -537,6 +597,7 @@ Permitted sources (retrieved for this query):
         "investor_takeaway": investor_takeaway[:1],
         "confidence":        confidence,
         "sources":           sources,
+        "impact_vectors":    impact_vectors,
         "portfolio_impacts": portfolio_impacts,
         "debug": {
             **(state.get("debug") or {}),
