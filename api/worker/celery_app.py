@@ -13,8 +13,17 @@ import ssl
 
 from celery import Celery
 from celery.schedules import crontab
+from celery.signals import after_setup_logger, after_setup_task_logger
 
 from georisk_agent.app.config import settings
+
+
+@after_setup_logger.connect
+@after_setup_task_logger.connect
+def _configure_worker_logging(**kwargs) -> None:
+    """Apply the shared JSON formatter to the Celery worker process."""
+    from api.core.log_config import configure_json_logging
+    configure_json_logging()
 
 celery_app = Celery(
     "georisk_worker",
