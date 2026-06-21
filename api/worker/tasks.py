@@ -87,12 +87,14 @@ def _persist_analysis(
     result: dict[str, Any],
     tokens_used: int | None = None,
     duration_ms: int | None = None,
-) -> None:
+    langsmith_run_id: uuid.UUID | None = None,
+) -> uuid.UUID | None:
+    """Persist the analysis and return the newly created analysis_id, or None on failure."""
     import concurrent.futures
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
     from georisk_agent.db.dal import save_analysis
 
-    async def _run() -> None:
+    async def _run() -> uuid.UUID:
         ssl_ctx = ssl.create_default_context()
         engine = create_async_engine(
             settings.database_url,
@@ -108,7 +110,7 @@ def _persist_analysis(
                 autoflush=False,
             )
             async with factory() as session:
-                await save_analysis(
+                record = await save_analysis(
                     session,
                     user_id=uuid.UUID(user_id) if user_id else None,
                     query=query,
@@ -116,14 +118,16 @@ def _persist_analysis(
                     confidence=result["confidence"],
                     tokens_used=tokens_used,
                     duration_ms=duration_ms,
+                    langsmith_run_id=langsmith_run_id,
                 )
                 await session.commit()
+                return record.id
         finally:
             await engine.dispose()
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
         future = pool.submit(asyncio.run, _run())
-        future.result(timeout=60)
+        return future.result(timeout=60)
 
 
 @celery_app.task(bind=True, name="tasks.run_geopolitical_agent")
@@ -237,9 +241,17 @@ def resume_geopolitical_agent_task(self, original_task_id: str, user_id: str) ->
         if portfolio is not None:
             initial_state["portfolio"] = portfolio
 
+        # Pre-generate the run_id so we control the root trace ID in LangSmith.
+        # Passing it via config["run_id"] makes LangSmith use this exact UUID as
+        # the root span, which we then store in analysis_history for feedback linking.
+        langsmith_run_id = uuid.uuid4()
+
         counter = _TokenCounter()
         t0 = time.perf_counter()
-        final_state: dict = graph.invoke(initial_state, config={"callbacks": [counter]})
+        final_state: dict = graph.invoke(
+            initial_state,
+            config={"callbacks": [counter], "run_id": str(langsmith_run_id)},
+        )
         duration_ms = int((time.perf_counter() - t0) * 1000)
         tokens_used = counter.total_tokens or None
 
@@ -254,11 +266,12 @@ def resume_geopolitical_agent_task(self, original_task_id: str, user_id: str) ->
         logger.info(
             "Task B SUCCESS",
             extra={
-                "task_id":     original_task_id,
-                "user_id":     user_id,
-                "duration_ms": duration_ms,
-                "tokens_used": tokens_used,
-                "confidence":  result.get("confidence"),
+                "task_id":          original_task_id,
+                "user_id":          user_id,
+                "duration_ms":      duration_ms,
+                "tokens_used":      tokens_used,
+                "confidence":       result.get("confidence"),
+                "langsmith_run_id": str(langsmith_run_id),
             },
         )
 
@@ -267,16 +280,24 @@ def resume_geopolitical_agent_task(self, original_task_id: str, user_id: str) ->
             set_cached_result_sync(r, query, result, settings.query_cache_ttl_seconds)
 
         try:
-            _persist_analysis(
+            analysis_id = _persist_analysis(
                 user_id=user_id,
                 query=query,
                 result=result,
                 tokens_used=tokens_used,
                 duration_ms=duration_ms,
+                langsmith_run_id=langsmith_run_id,
             )
+            if analysis_id is not None:
+                _patch_task_state(r, original_task_id, {"analysis_id": str(analysis_id)})
             logger.info(
                 "Task B persisted to analysis_history",
-                extra={"task_id": original_task_id, "tokens_used": tokens_used, "duration_ms": duration_ms},
+                extra={
+                    "task_id":     original_task_id,
+                    "analysis_id": str(analysis_id) if analysis_id else None,
+                    "tokens_used": tokens_used,
+                    "duration_ms": duration_ms,
+                },
             )
         except Exception as persist_exc:
             logger.warning(

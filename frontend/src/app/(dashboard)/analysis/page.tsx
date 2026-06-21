@@ -25,6 +25,7 @@ export default function AnalysisPage() {
   const [uiState, setUiState]       = useState<UIState>("idle");
   const [taskStatus, setTaskStatus] = useState<TaskStatus>("PENDING");
   const [result, setResult]         = useState<AnalysisResult | null>(null);
+  const [analysisId, setAnalysisId] = useState<string | null>(null);
   const [error, setError]           = useState<string | null>(null);
   const [subQuestions, setSubQuestions] = useState<string[]>([]);
   const [taskId, setTaskId]         = useState<string | null>(null);
@@ -65,6 +66,7 @@ export default function AnalysisPage() {
         } else if (data.status === "SUCCESS") {
           stopPolling();
           setResult(data.result);
+          setAnalysisId(data.analysis_id ?? null);
           setUiState("done");
         } else if (data.status === "FAILED") {
           stopPolling();
@@ -116,6 +118,7 @@ export default function AnalysisPage() {
     setQuery("");
     setUiState("idle");
     setResult(null);
+    setAnalysisId(null);
     setError(null);
     setTaskStatus("PENDING");
     setSubQuestions([]);
@@ -245,7 +248,7 @@ export default function AnalysisPage() {
 
       {/* Results */}
       {uiState === "done" && result && (
-        <ResultsDisplay result={result} query={query} />
+        <ResultsDisplay result={result} query={query} analysisId={analysisId} />
       )}
 
       {/* Rate limit / generic error shown below stepper in error state */}

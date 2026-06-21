@@ -406,6 +406,7 @@ async def save_analysis(
     model_name: str | None = None,
     tokens_used: int | None = None,
     duration_ms: int | None = None,
+    langsmith_run_id: uuid.UUID | None = None,
 ) -> AnalysisHistory:
     """
     Persist a completed investment analysis report.
@@ -413,6 +414,8 @@ async def save_analysis(
     user_id may be None for anonymous CLI invocations or evaluation runs.
     report should be AnalysisOutput.model_dump() — the full structured output
     including market_impacts, risks, scenarios, investor_takeaway, and sources.
+    langsmith_run_id is the root trace UUID passed to graph.invoke(); used by
+    the feedback endpoint to target the correct LangSmith trace.
     """
     record = AnalysisHistory(
         user_id=user_id,
@@ -422,6 +425,7 @@ async def save_analysis(
         model_name=model_name,
         tokens_used=tokens_used,
         duration_ms=duration_ms,
+        langsmith_run_id=langsmith_run_id,
     )
     session.add(record)
     await session.flush()
