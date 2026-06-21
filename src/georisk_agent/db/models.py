@@ -159,6 +159,11 @@ class AnalysisHistory(Base):
     model_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     tokens_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Root LangSmith trace ID — set from the run_id passed to graph.invoke().
+    # NULL for cache hits and rows created before this column was added.
+    langsmith_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=_utcnow
     )

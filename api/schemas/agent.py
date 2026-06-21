@@ -2,7 +2,7 @@
 
 from typing import Any, List, Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class AnalyzeRequest(BaseModel):
@@ -41,6 +41,24 @@ class TaskStatusResponse(BaseModel):
     # Populated only when status == "WAITING_FOR_INPUT"
     sub_questions: Optional[List[str]] = None
     cached: Optional[bool] = None
+    # Set after successful DB persist — used by the frontend feedback flow
+    analysis_id: Optional[str] = None
+
+
+class FeedbackRequest(BaseModel):
+    score: Literal[0, 1] = Field(
+        description="1 = thumbs up (positive), 0 = thumbs down (negative)",
+    )
+    comment: Optional[str] = Field(
+        default=None,
+        max_length=1000,
+        description="Optional free-text comment to attach to the feedback",
+    )
+
+
+class FeedbackResponse(BaseModel):
+    status: str
+    feedback_id: Optional[str] = None
 
 
 class HistoryItemResponse(BaseModel):

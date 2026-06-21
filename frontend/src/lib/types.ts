@@ -80,6 +80,18 @@ export interface TaskStatusResponse {
   sub_questions?: string[];
   created_at: string;
   completed_at: string | null;
+  /** Set after successful DB persist — used by the feedback flow */
+  analysis_id?: string | null;
+}
+
+export interface FeedbackRequest {
+  score: 0 | 1;
+  comment?: string;
+}
+
+export interface FeedbackResponse {
+  status: string;
+  feedback_id?: string | null;
 }
 
 export interface HistoryItem {

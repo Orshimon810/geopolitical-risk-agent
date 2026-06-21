@@ -1,4 +1,4 @@
-import type { PortfolioHolding, TaskStatusResponse } from "./types";
+import type { FeedbackResponse, PortfolioHolding, TaskStatusResponse } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -98,6 +98,13 @@ export const api = {
   deleteAnalysis(id: string): Promise<{ deleted: boolean }> {
     return apiFetch<{ deleted: boolean }>(`/agent/history/${id}`, {
       method: "DELETE",
+    });
+  },
+
+  submitFeedback(analysisId: string, score: 0 | 1, comment?: string): Promise<FeedbackResponse> {
+    return apiFetch<FeedbackResponse>(`/agent/analysis/${analysisId}/feedback`, {
+      method: "POST",
+      body: JSON.stringify({ score, comment: comment ?? null }),
     });
   },
 
