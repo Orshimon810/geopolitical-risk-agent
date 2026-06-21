@@ -35,13 +35,15 @@ from api.dependencies import check_rate_limit, db_session, get_current_user
 from api.schemas.agent import (
     AnalyzeRequest,
     ApprovePlanRequest,
+    FeedbackRequest,
+    FeedbackResponse,
     HistoryItemResponse,
     TaskCreatedResponse,
     TaskStatusResponse,
 )
 from api.worker.tasks import resume_geopolitical_agent_task, run_geopolitical_agent_task
 from georisk_agent.app.config import settings
-from georisk_agent.db.dal import delete_analysis_by_id, get_user_history, get_user_portfolio
+from georisk_agent.db.dal import delete_analysis_by_id, get_analysis_by_id, get_user_history, get_user_portfolio
 from georisk_agent.db.models import User
 
 logger = logging.getLogger(__name__)
@@ -271,3 +273,90 @@ async def delete_analysis(
             detail="Analysis not found.",
         )
     return {"deleted": True}
+
+
+@router.post(
+    "/analysis/{analysis_id}/feedback",
+    response_model=FeedbackResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Submit thumbs-up / thumbs-down feedback that syncs to LangSmith",
+)
+async def submit_feedback(
+    analysis_id: str,
+    body: FeedbackRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(db_session),
+) -> FeedbackResponse:
+    """
+    Post user satisfaction feedback (score 1 = positive, 0 = negative) for a
+    completed analysis. The feedback is forwarded to LangSmith and attached to
+    the root trace that was created when the analysis ran.
+
+    Returns 404 if the analysis doesn't exist or belongs to another user.
+    Returns 422 if the analysis has no associated LangSmith trace (e.g. it was
+    served from the query cache before run_id tracking was introduced).
+    Returns 503 if the LangSmith SDK is not configured (missing API key).
+    """
+    try:
+        analysis_uuid = uuid.UUID(analysis_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Analysis not found.",
+        )
+
+    record = await get_analysis_by_id(session, analysis_uuid, user_id=current_user.id)
+    if record is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Analysis not found.",
+        )
+
+    if record.langsmith_run_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                "This analysis has no associated LangSmith trace. "
+                "Feedback is only available for analyses run after tracing was enabled."
+            ),
+        )
+
+    try:
+        from langsmith import Client as LangSmithClient
+        ls_client = LangSmithClient()
+    except Exception as exc:
+        logger.error("LangSmith client init failed: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="LangSmith is not configured. Set LANGSMITH_API_KEY to enable feedback.",
+        )
+
+    try:
+        feedback = ls_client.create_feedback(
+            run_id=record.langsmith_run_id,
+            key="user-satisfaction",
+            score=body.score,
+            comment=body.comment,
+        )
+        feedback_id = str(feedback.id) if feedback and hasattr(feedback, "id") else None
+    except Exception as exc:
+        logger.error(
+            "LangSmith create_feedback failed for analysis=%s run_id=%s: %s",
+            analysis_id,
+            record.langsmith_run_id,
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Failed to submit feedback to LangSmith. Please try again later.",
+        )
+
+    logger.info(
+        "Feedback submitted | analysis=%s run_id=%s score=%s user=%s",
+        analysis_id,
+        record.langsmith_run_id,
+        body.score,
+        current_user.id,
+    )
+    return FeedbackResponse(status="ok", feedback_id=feedback_id)
