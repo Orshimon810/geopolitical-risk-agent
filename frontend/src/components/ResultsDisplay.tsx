@@ -1,13 +1,105 @@
 "use client";
 
+import { useState } from "react";
 import { motion } from "framer-motion";
-import { AlertTriangle, BarChart2, Lightbulb, GitBranch, BookOpen, Map, Briefcase } from "lucide-react";
+import { AlertTriangle, BarChart2, Lightbulb, GitBranch, BookOpen, Map, Briefcase, ThumbsUp, ThumbsDown, Loader2 } from "lucide-react";
 import { MarketSignals } from "@/components/MarketSignals";
+import { api } from "@/lib/api";
 import type { AnalysisResult, Confidence, PortfolioHoldingImpact, Verdict } from "@/lib/types";
 
 interface ResultsDisplayProps {
   result: AnalysisResult;
   query: string;
+  analysisId?: string | null;
+}
+
+type FeedbackState = "idle" | "loading" | "submitted" | "error";
+
+function FeedbackFooter({ analysisId }: { analysisId?: string | null }) {
+  const [feedbackState, setFeedbackState] = useState<FeedbackState>("idle");
+  const [submittedScore, setSubmittedScore] = useState<0 | 1 | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  if (!analysisId) return null;
+
+  async function handleFeedback(score: 0 | 1) {
+    if (feedbackState !== "idle") return;
+    setFeedbackState("loading");
+    setSubmittedScore(score);
+    try {
+      await api.submitFeedback(analysisId!, score);
+      setFeedbackState("submitted");
+    } catch (err: unknown) {
+      setErrorMsg(err instanceof Error ? err.message : "Failed to submit feedback");
+      setFeedbackState("error");
+    }
+  }
+
+  const isLoading = feedbackState === "loading";
+  const isSubmitted = feedbackState === "submitted";
+  const isDisabled = feedbackState !== "idle";
+
+  return (
+    <div className="border-t border-slate-800 px-6 py-4 flex items-center justify-between gap-4">
+      <p className="text-[9px] text-slate-600 uppercase tracking-[0.18em] data-mono">
+        {isSubmitted ? "Feedback received" : feedbackState === "error" ? errorMsg : "Was this analysis helpful?"}
+      </p>
+
+      {!isSubmitted && feedbackState !== "error" && (
+        <div className="flex items-center gap-2">
+          {/* Thumbs Up */}
+          <button
+            onClick={() => handleFeedback(1)}
+            disabled={isDisabled}
+            aria-label="Helpful"
+            className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs transition-all focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-500/50 disabled:cursor-not-allowed ${
+              isLoading && submittedScore === 1
+                ? "border-emerald-600/50 bg-emerald-500/10 text-emerald-400"
+                : "border-slate-700 bg-slate-800/60 text-slate-500 hover:border-emerald-600/50 hover:text-emerald-400 hover:bg-emerald-500/10"
+            }`}
+          >
+            {isLoading && submittedScore === 1
+              ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              : <ThumbsUp className="h-3.5 w-3.5" />}
+          </button>
+
+          {/* Thumbs Down */}
+          <button
+            onClick={() => handleFeedback(0)}
+            disabled={isDisabled}
+            aria-label="Not helpful"
+            className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs transition-all focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-500/50 disabled:cursor-not-allowed ${
+              isLoading && submittedScore === 0
+                ? "border-rose-600/50 bg-rose-500/10 text-rose-400"
+                : "border-slate-700 bg-slate-800/60 text-slate-500 hover:border-rose-600/50 hover:text-rose-400 hover:bg-rose-500/10"
+            }`}
+          >
+            {isLoading && submittedScore === 0
+              ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              : <ThumbsDown className="h-3.5 w-3.5" />}
+          </button>
+        </div>
+      )}
+
+      {isSubmitted && (
+        <div className={`flex items-center gap-1.5 text-xs ${submittedScore === 1 ? "text-emerald-400" : "text-rose-400"}`}>
+          {submittedScore === 1
+            ? <ThumbsUp className="h-3.5 w-3.5" />
+            : <ThumbsDown className="h-3.5 w-3.5" />}
+          <span className="data-mono text-[10px] uppercase tracking-wide">Submitted</span>
+        </div>
+      )}
+
+      {feedbackState === "error" && (
+        <button
+          onClick={() => { setFeedbackState("idle"); setSubmittedScore(null); setErrorMsg(null); }}
+          className="text-[10px] text-amber-600 hover:text-amber-400 transition-colors data-mono uppercase tracking-wide"
+        >
+          Retry
+        </button>
+      )}
+    </div>
+  );
 }
 
 /* ── Confidence meter — three ascending bars like signal strength ── */
@@ -135,7 +227,7 @@ function PortfolioImpactCard({ impact }: { impact: PortfolioHoldingImpact }) {
   );
 }
 
-export function ResultsDisplay({ result, query }: ResultsDisplayProps) {
+export function ResultsDisplay({ result, query, analysisId }: ResultsDisplayProps) {
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -263,6 +355,9 @@ export function ResultsDisplay({ result, query }: ResultsDisplayProps) {
           </Section>
         )}
       </div>
+
+      {/* Feedback */}
+      <FeedbackFooter analysisId={analysisId} />
     </motion.div>
   );
 }
