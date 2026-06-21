@@ -280,6 +280,7 @@ Always follow the Git Flow branching strategy:
    - `fix(api): handle null response from payments`
    - `refactor(db): extract query builder`
    - `docs(readme): update setup instructions`
+5. **Merge direction is always feature → develop → main. Never commit to main directly and never merge main into develop to propagate a fix.** If a fix is needed after merging, check out a new `fix/` branch from develop, commit there, then merge fix → develop → main.
 
 ### Starting New Work
 When asked to implement a feature or fix:
