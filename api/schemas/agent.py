@@ -43,6 +43,9 @@ class TaskStatusResponse(BaseModel):
     cached: Optional[bool] = None
     # Set after successful DB persist — used by the frontend feedback flow
     analysis_id: Optional[str] = None
+    # Set while status == "PROCESSING" — the LangGraph node currently executing.
+    # Read from a separate Redis key written by Task B so polling can show live progress.
+    current_node: Optional[str] = None
 
 
 class FeedbackRequest(BaseModel):

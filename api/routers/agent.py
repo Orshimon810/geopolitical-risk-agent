@@ -164,6 +164,13 @@ async def get_task_status(
 
     data = json.loads(raw)
 
+    # Augment with the currently-executing LangGraph node so the frontend
+    # polling loop can drive the AgentStepper even when SSE is not connected.
+    if data.get("status") == "PROCESSING":
+        current_node = await redis_client.get(f"task:{task_id}:node")
+        if current_node:
+            data["current_node"] = current_node
+
     # ── HITL auto-approval after timeout ──────────────────────────
     if data.get("status") == "WAITING_FOR_INPUT":
         waiting_since = data.get("waiting_since", "")
@@ -316,6 +323,13 @@ async def stream_task(
             return
 
         # ── Live path: subscribe to Redis Pub/Sub ───────────────────────────
+        # For late-connecting clients (SSE opened after Task B already started),
+        # emit the current active node immediately so the UI doesn't wait for the
+        # next Pub/Sub event to learn which node is running.
+        current_node = await redis_client.get(f"task:{task_id}:node")
+        if current_node:
+            yield {"data": json.dumps({"type": "node_start", "node": current_node})}
+
         # A dedicated connection is required — subscribing to a channel puts a
         # redis-py connection into Pub/Sub mode where normal commands are blocked.
         _ssl_kwargs: dict = (
