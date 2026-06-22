@@ -28,6 +28,41 @@ const NODE_STATUS_LABELS: Record<string, string> = {
   final_output:          "Finalizing report",
 };
 
+/**
+ * Extracts the value of the "reasoning" field from a partially-streamed JSON
+ * string.  Returns the decoded text seen so far and whether the field's closing
+ * quote has been reached (i.e. reasoning is fully written and the model has
+ * moved on to the next field).
+ */
+function extractReasoning(raw: string): { text: string; closed: boolean } {
+  const marker = '"reasoning"';
+  const mIdx = raw.indexOf(marker);
+  if (mIdx === -1) return { text: "", closed: false };
+
+  let i = mIdx + marker.length;
+  while (i < raw.length && raw[i] !== '"') i++; // skip : and whitespace
+  if (i >= raw.length) return { text: "", closed: false };
+  i++; // skip opening "
+
+  let out = "";
+  while (i < raw.length) {
+    if (raw[i] === "\\") {
+      if (i + 1 < raw.length) {
+        const esc = raw[i + 1];
+        out += esc === "n" ? "\n" : esc === "t" ? "\t" : esc;
+        i += 2;
+      } else {
+        break; // incomplete escape at end of buffer — wait for more
+      }
+    } else if (raw[i] === '"') {
+      return { text: out, closed: true };
+    } else {
+      out += raw[i++];
+    }
+  }
+  return { text: out, closed: false };
+}
+
 function StreamingView({
   query,
   streamingText,
@@ -46,6 +81,8 @@ function StreamingView({
   }, [streamingText]);
 
   const nodeLabel = activeNode ? (NODE_STATUS_LABELS[activeNode] ?? activeNode) : null;
+  const { text: reasoning, closed: reasoningClosed } = extractReasoning(streamingText);
+  const hasReasoning = reasoning.length > 0;
 
   return (
     <motion.div
@@ -70,16 +107,30 @@ function StreamingView({
         )}
       </div>
 
-      {/* Streaming token output */}
+      {/* Reasoning body */}
       <div
         ref={scrollRef}
         className="px-6 py-5 h-52 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent"
       >
-        {streamingText ? (
-          <pre className="text-xs text-slate-400 leading-relaxed whitespace-pre-wrap break-words font-mono">
-            {streamingText}
-            <span className="inline-block h-3 w-1.5 bg-amber-400 cursor-blink ml-0.5 align-text-bottom" />
-          </pre>
+        {hasReasoning ? (
+          <div className="space-y-3">
+            <p className="text-[9px] text-slate-600 uppercase tracking-[0.12em] data-mono flex items-center gap-1.5">
+              <span className="h-1.5 w-1.5 rounded-full bg-blue-400/70 shrink-0" />
+              Reasoning
+            </p>
+            <p className="text-xs text-slate-300 leading-relaxed">
+              {reasoning}
+              {!reasoningClosed && (
+                <span className="inline-block h-3 w-1.5 bg-amber-400 cursor-blink ml-0.5 align-text-bottom" />
+              )}
+            </p>
+            {reasoningClosed && (
+              <div className="flex items-center gap-2 text-xs text-slate-600 data-mono pt-1 border-t border-slate-800">
+                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500/60 animate-pulse shrink-0" />
+                Structuring output&hellip;
+              </div>
+            )}
+          </div>
         ) : (
           <div className="flex items-start gap-2.5 text-xs text-slate-600 data-mono">
             <span className="h-1.5 w-1.5 rounded-full bg-amber-500/60 animate-pulse mt-1 shrink-0" />
