@@ -105,12 +105,15 @@ export default function AnalysisPage() {
           es.close();
           esRef.current = null;
         } else if (event.type === "error") {
+          // Don't hard-fail — the SSE server sends this on transport timeouts
+          // (e.g. 120s per-message wait).  Fall back to polling which will
+          // correctly surface FAILED state (with the real error message) or
+          // SUCCESS if the task already completed.
           streamDone = true;
-          setError(event.message);
-          setUiState("error");
-          setTaskStatus("FAILED");
           es.close();
           esRef.current = null;
+          sseFallbackRef.current = true;
+          startPollingRef.current(id);
         }
       });
     } catch (err: unknown) {
@@ -148,6 +151,8 @@ export default function AnalysisPage() {
         const prev = prevPollStatusRef.current;
         prevPollStatusRef.current = data.status as TaskStatus;
         setTaskStatus(data.status as TaskStatus);
+        // Drive the AgentStepper with the active node even in polling-fallback mode.
+        if (data.current_node) setActiveNode(data.current_node);
 
         if (data.status === "WAITING_FOR_INPUT") {
           if (data.sub_questions && data.sub_questions.length > 0) {

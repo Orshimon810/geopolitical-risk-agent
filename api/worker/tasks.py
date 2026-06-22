@@ -320,6 +320,11 @@ def resume_geopolitical_agent_task(self, original_task_id: str, user_id: str) ->
                         )
 
                 elif kind == "on_chain_start" and name in _PIPELINE_NODES:
+                    # Write to a separate key so polling can report the active node
+                    # even when the SSE Pub/Sub stream is unavailable.
+                    await pub_client.set(
+                        f"task:{original_task_id}:node", name, ex=_TASK_TTL_SECONDS
+                    )
                     await pub_client.publish(
                         channel,
                         json.dumps({"type": "node_start", "node": name}),
