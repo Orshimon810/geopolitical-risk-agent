@@ -278,12 +278,14 @@ def resume_geopolitical_agent_task(self, original_task_id: str, user_id: str) ->
 
     async def _run_and_stream() -> dict[str, Any]:
         """
-        Run the resume graph with astream_events, publishing events to Redis
-        Pub/Sub as they arrive.  Persists the result to the DB inside this
-        async context (avoids a nested ThreadPoolExecutor) and publishes a
-        final "complete" packet containing the analysis_id.
+        Run the resume graph with astream_events, writing events to two places:
+          1. A Redis List  stream_events:{task_id}  — replay buffer for late SSE
+             clients that miss events published before they subscribe.
+          2. Redis Pub/Sub stream:{task_id}          — kept for any real-time
+             subscribers that happen to be connected already.
 
-        Returns a summary dict for the synchronous Task B body.
+        The SSE endpoint now polls the list rather than relying on Pub/Sub, so
+        late-connecting clients see the full event history from the start.
         """
         import redis.asyncio as aioredis
         from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
@@ -295,6 +297,18 @@ def resume_geopolitical_agent_task(self, original_task_id: str, user_id: str) ->
         pub_client = aioredis.from_url(
             settings.redis_url, decode_responses=True, **_ssl_kwargs
         )
+
+        stream_key = f"stream_events:{original_task_id}"
+        # Clear any stale events from a previous run of this task_id.
+        await pub_client.delete(stream_key)
+
+        async def _emit(payload: str) -> None:
+            """Push event to replay list + publish to Pub/Sub channel."""
+            pipe = pub_client.pipeline()
+            pipe.rpush(stream_key, payload)
+            pipe.expire(stream_key, 3600)   # 1-hour TTL — plenty for any reconnect
+            pipe.publish(channel, payload)
+            await pipe.execute()
 
         langsmith_run_id = uuid.uuid4()
         counter = _TokenCounter()
@@ -322,21 +336,15 @@ def resume_geopolitical_agent_task(self, original_task_id: str, user_id: str) ->
                             if frag:
                                 content += frag
                     if content:
-                        await pub_client.publish(
-                            channel,
-                            json.dumps({"type": "token", "content": content}),
-                        )
+                        await _emit(json.dumps({"type": "token", "content": content}))
 
                 elif kind == "on_chain_start" and name in _PIPELINE_NODES:
                     # Write to a separate key so polling can report the active node
-                    # even when the SSE Pub/Sub stream is unavailable.
+                    # even when the SSE stream is unavailable.
                     await pub_client.set(
                         f"task:{original_task_id}:node", name, ex=_TASK_TTL_SECONDS
                     )
-                    await pub_client.publish(
-                        channel,
-                        json.dumps({"type": "node_start", "node": name}),
-                    )
+                    await _emit(json.dumps({"type": "node_start", "node": name}))
 
                 elif kind == "on_chain_end" and name == "final_output":
                     # final_output_node returns the full cleaned state dict.
@@ -388,16 +396,13 @@ def resume_geopolitical_agent_task(self, original_task_id: str, user_id: str) ->
                     extra={"task_id": original_task_id},
                 )
 
-            # Publish the complete packet — includes analysis_id so the UI can
-            # link feedback to the correct LangSmith trace immediately.
-            await pub_client.publish(
-                channel,
-                json.dumps({
-                    "type":        "complete",
-                    "analysis_id": analysis_id,
-                    "output":      result,
-                }),
-            )
+            # Emit the complete packet — includes analysis_id so the UI can link
+            # feedback to the correct LangSmith trace immediately.
+            await _emit(json.dumps({
+                "type":        "complete",
+                "analysis_id": analysis_id,
+                "output":      result,
+            }))
 
             return {
                 "result":           result,
@@ -408,13 +413,9 @@ def resume_geopolitical_agent_task(self, original_task_id: str, user_id: str) ->
             }
 
         except Exception as exc:
-            # Notify any SSE subscribers before re-raising so the frontend
-            # can stop waiting instead of hitting the 2-minute per-message timeout.
+            # Emit error packet before re-raising so the frontend stops waiting.
             try:
-                await pub_client.publish(
-                    channel,
-                    json.dumps({"type": "error", "message": str(exc)}),
-                )
+                await _emit(json.dumps({"type": "error", "message": str(exc)}))
             except Exception:
                 pass
             raise
