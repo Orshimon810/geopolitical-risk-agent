@@ -313,6 +313,14 @@ def resume_geopolitical_agent_task(self, original_task_id: str, user_id: str) ->
                 if kind == "on_chat_model_stream":
                     chunk = event["data"].get("chunk")
                     content = getattr(chunk, "content", "") if chunk else ""
+                    # with_structured_output() uses function-calling — tokens land in
+                    # tool_call argument fragments, not in content.  Extract them so
+                    # the browser sees a real-time stream of the JSON being built.
+                    if not content and chunk:
+                        for tc in (getattr(chunk, "additional_kwargs", {}).get("tool_calls") or []):
+                            frag = (tc.get("function") or {}).get("arguments", "")
+                            if frag:
+                                content += frag
                     if content:
                         await pub_client.publish(
                             channel,
