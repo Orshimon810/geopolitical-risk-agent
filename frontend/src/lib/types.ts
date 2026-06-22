@@ -82,6 +82,8 @@ export interface TaskStatusResponse {
   completed_at: string | null;
   /** Set after successful DB persist — used by the feedback flow */
   analysis_id?: string | null;
+  /** The LangGraph node currently executing (PROCESSING only). Enables polling to show live progress. */
+  current_node?: string | null;
 }
 
 export type StreamEvent =
