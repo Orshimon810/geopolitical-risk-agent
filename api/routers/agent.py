@@ -291,22 +291,19 @@ async def stream_task(
         )
 
     async def generate():
-        # ── Fast path: task already finished ────────────────────────────────
-        # Pub/Sub delivers no history, so late-connecting clients read from
-        # the Redis task-state key instead of waiting on the channel.
+        # ── Ownership + existence check ──────────────────────────────────────
         raw = await redis_client.get(f"task:{task_id}")
         if raw is None:
             yield {"data": json.dumps({"type": "error", "message": "Task not found or expired"})}
             return
 
         task_data = json.loads(raw)
-
-        # Ownership check — task state carries the submitting user's id.
         stored_user_id = task_data.get("user_id", "")
         if stored_user_id and stored_user_id != token_user_id:
             yield {"data": json.dumps({"type": "error", "message": "Forbidden"})}
             return
 
+        # ── Fast path: task already finished ────────────────────────────────
         task_status = task_data.get("status", "")
         if task_status == "SUCCESS":
             yield {"data": json.dumps({
@@ -322,70 +319,61 @@ async def stream_task(
             })}
             return
 
-        # ── Live path: subscribe to Redis Pub/Sub ───────────────────────────
-        # For late-connecting clients (SSE opened after Task B already started),
-        # emit the current active node immediately so the UI doesn't wait for the
-        # next Pub/Sub event to learn which node is running.
-        current_node = await redis_client.get(f"task:{task_id}:node")
-        if current_node:
-            yield {"data": json.dumps({"type": "node_start", "node": current_node})}
-
-        # A dedicated connection is required — subscribing to a channel puts a
-        # redis-py connection into Pub/Sub mode where normal commands are blocked.
-        _ssl_kwargs: dict = (
-            {"ssl_cert_reqs": None} if settings.redis_url.startswith("rediss://") else {}
-        )
-        pub_client = aioredis.from_url(
-            settings.redis_url, decode_responses=True, **_ssl_kwargs
-        )
-        pubsub = pub_client.pubsub()
-        await pubsub.subscribe(f"stream:{task_id}")
-
+        # ── Live path: poll the stream_events Redis List ─────────────────────
+        # Task B RPUSHes every event to stream_events:{task_id} AND publishes to
+        # Pub/Sub.  Polling the list here means late-connecting SSE clients (which
+        # is almost always the case — Task B starts within milliseconds of
+        # approve-plan while the browser takes hundreds of ms to open EventSource)
+        # receive the full event history from the beginning, including all token
+        # chunks already emitted before the SSE connection was established.
+        stream_key = f"stream_events:{task_id}"
         loop = asyncio.get_running_loop()
-        # Hard cap: 5 minutes total per SSE connection.
-        total_deadline = loop.time() + 300
-        # Per-message wait: 2 minutes covers the longest single-node processing time.
-        per_message_timeout = 120.0
-
-        listen_iter = pubsub.listen().__aiter__()
+        deadline = loop.time() + 300   # 5-minute hard cap per connection
+        cursor = 0
 
         try:
             while True:
-                if loop.time() > total_deadline:
+                if loop.time() > deadline:
                     yield {"data": json.dumps({"type": "error", "message": "Stream timeout"})}
-                    break
+                    return
 
-                try:
-                    message = await asyncio.wait_for(
-                        listen_iter.__anext__(), timeout=per_message_timeout
-                    )
-                except asyncio.TimeoutError:
-                    yield {"data": json.dumps({
-                        "type":    "error",
-                        "message": "No events received — stream timed out",
-                    })}
-                    break
-                except StopAsyncIteration:
-                    break
+                events: list[str] = await redis_client.lrange(stream_key, cursor, -1)
+                if events:
+                    for ev_json in events:
+                        cursor += 1
+                        yield {"data": ev_json}
+                        try:
+                            if json.loads(ev_json).get("type") in ("complete", "error"):
+                                return
+                        except json.JSONDecodeError:
+                            pass
+                    # Don't sleep — drain the list as fast as possible.
+                    continue
 
-                if message["type"] != "message":
-                    continue  # skip subscribe/unsubscribe confirmation messages
+                # No new events yet.  Check if the task finished without writing
+                # to the list (e.g. cached hit, or pre-existing SUCCESS state).
+                task_raw = await redis_client.get(f"task:{task_id}")
+                if task_raw:
+                    td = json.loads(task_raw)
+                    ts = td.get("status")
+                    if ts == "SUCCESS":
+                        yield {"data": json.dumps({
+                            "type":        "complete",
+                            "analysis_id": td.get("analysis_id"),
+                            "output":      td.get("result"),
+                        })}
+                        return
+                    if ts == "FAILED":
+                        yield {"data": json.dumps({
+                            "type":    "error",
+                            "message": td.get("error", "Task failed"),
+                        })}
+                        return
 
-                yield {"data": message["data"]}
-
-                try:
-                    msg = json.loads(message["data"])
-                    if msg.get("type") in ("complete", "error"):
-                        break
-                except json.JSONDecodeError:
-                    pass
+                await asyncio.sleep(0.3)
 
         except asyncio.CancelledError:
-            pass  # client disconnected — cleanup runs in finally
-        finally:
-            await pubsub.unsubscribe(f"stream:{task_id}")
-            await pubsub.aclose()
-            await pub_client.aclose()
+            pass  # client disconnected
 
     return EventSourceResponse(generate())
 
