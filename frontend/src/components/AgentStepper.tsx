@@ -30,18 +30,42 @@ const STEPS: TerminalLine[] = [
 
 const STEP_DELAY_MS = 2200;
 
+// Maps a backend node name to the number of STEPS that should appear completed
+// when that node is the currently-executing one.
+const NODE_TO_STEP: Record<string, number> = {
+  rag_research:          1,  // planner done, retrieval starting
+  signals:               2,  // retrieval done, signals starting
+  analysis:              3,  // signals done, synthesis starting
+  consistency_validator: 3,
+  reviewer:              3,
+  final_output:          4,
+};
+
+const NODE_LABELS: Record<string, string> = {
+  rag_research:          "Retrieving evidence from corpus...",
+  signals:               "Fetching live market signals...",
+  analysis:              "Synthesizing geopolitical analysis...",
+  consistency_validator: "Validating portfolio consistency...",
+  reviewer:              "Running quality review...",
+  final_output:          "Finalizing...",
+};
+
 interface AgentStepperProps {
   status: TaskStatus;
   error?: string | null;
   subQuestions?: string[];
   onApprove?: (questions: string[]) => void;
+  /** Populated by SSE node_start events — drives real-time step advancement */
+  activeNode?: string;
 }
 
-export function AgentStepper({ status, error, subQuestions, onApprove }: AgentStepperProps) {
+export function AgentStepper({ status, error, subQuestions, onApprove, activeNode }: AgentStepperProps) {
   const [visibleCount, setVisibleCount] = useState(0);
   const [editedQuestions, setEditedQuestions] = useState<string[]>([]);
   const [prevSubQuestions, setPrevSubQuestions] = useState<string[] | undefined>(undefined);
   const prevStatusRef = useRef<TaskStatus>(status);
+  // When SSE events are driving progress, skip the timer-based animation.
+  const usingLiveEvents = activeNode != null;
 
   // Sync editable questions from props without a useEffect:
   // When subQuestions changes (prop arrives from polling), update local state during render.
@@ -53,7 +77,20 @@ export function AgentStepper({ status, error, subQuestions, onApprove }: AgentSt
     }
   }
 
+  // Real-time step advancement driven by SSE node_start events.
   useEffect(() => {
+    if (!usingLiveEvents || activeNode == null) return;
+    const step = NODE_TO_STEP[activeNode];
+    if (step !== undefined) {
+      const t = setTimeout(() => setVisibleCount(step), 0);
+      return () => clearTimeout(t);
+    }
+  }, [activeNode, usingLiveEvents]);
+
+  // Timer-based fallback animation (only when not driven by live SSE events).
+  useEffect(() => {
+    if (usingLiveEvents) return;
+
     const prev = prevStatusRef.current;
     prevStatusRef.current = status;
 
@@ -77,7 +114,7 @@ export function AgentStepper({ status, error, subQuestions, onApprove }: AgentSt
       // Step 1 (planner) is done; pause here
       setVisibleCount(1);
     }
-  }, [status]);
+  }, [status, usingLiveEvents]);
 
   const isProcessing     = status === "PROCESSING";
   const isWaiting        = status === "WAITING_FOR_INPUT";
@@ -203,8 +240,26 @@ export function AgentStepper({ status, error, subQuestions, onApprove }: AgentSt
           )}
         </AnimatePresence>
 
-        {/* Blinking cursor while waiting for next step */}
-        {isProcessing && visibleCount < STEPS.length && (
+        {/* Active node label (SSE-driven) */}
+        <AnimatePresence>
+          {isProcessing && activeNode && NODE_LABELS[activeNode] && (
+            <motion.p
+              key={activeNode}
+              initial={{ opacity: 0, y: 3 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.18 }}
+              className="flex items-center gap-1.5"
+            >
+              <span className="text-amber-500 shrink-0">$</span>
+              <span className="text-amber-400/80">{NODE_LABELS[activeNode]}</span>
+              <span className="inline-block h-3 w-1.5 bg-amber-400 cursor-blink ml-0.5" />
+            </motion.p>
+          )}
+        </AnimatePresence>
+
+        {/* Blinking cursor while waiting for next step (timer-driven fallback) */}
+        {isProcessing && !activeNode && visibleCount < STEPS.length && (
           <motion.p
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}

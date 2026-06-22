@@ -29,7 +29,15 @@ export default function AnalysisPage() {
   const [error, setError]           = useState<string | null>(null);
   const [subQuestions, setSubQuestions] = useState<string[]>([]);
   const [taskId, setTaskId]         = useState<string | null>(null);
+
+  // Streaming state
+  const [streamingText, setStreamingText] = useState("");
+  const [activeNode, setActiveNode]       = useState<string | null>(null);
+
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const esRef   = useRef<EventSource | null>(null);
+  // Tracks the last-seen poll status so we can detect WAITING→PROCESSING for auto-approve.
+  const prevPollStatusRef = useRef<TaskStatus>("PENDING");
 
   const [includePortfolio, setIncludePortfolio] = useState(false);
   const [portfolioCount, setPortfolioCount]     = useState<number | null>(null);
@@ -43,27 +51,99 @@ export default function AnalysisPage() {
       .catch(() => setPortfolioCount(0));
   }, []);
 
-  const stopPolling = () => {
+  // Clean up both polling interval and SSE stream on unmount.
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+      if (esRef.current) esRef.current.close();
+    };
+  }, []);
+
+  const stopPolling = useCallback(() => {
     if (pollRef.current) {
       clearInterval(pollRef.current);
       pollRef.current = null;
     }
-  };
+  }, []);
 
+  const closeStream = useCallback(() => {
+    if (esRef.current) {
+      esRef.current.close();
+      esRef.current = null;
+    }
+  }, []);
+
+  /**
+   * Opens an SSE stream for Task B.  Handles all stream events and cleans up
+   * the EventSource when the stream finishes (complete/error) or on unmount.
+   */
+  const openStream = useCallback((id: string) => {
+    let streamDone = false;
+
+    let es: EventSource;
+    try {
+      es = api.streamAnalysis(id, (event) => {
+        if (event.type === "node_start") {
+          setActiveNode(event.node);
+          setTaskStatus("PROCESSING");
+        } else if (event.type === "token") {
+          setStreamingText((prev) => prev + event.content);
+        } else if (event.type === "complete") {
+          streamDone = true;
+          setResult(event.output);
+          setAnalysisId(event.analysis_id ?? null);
+          setUiState("done");
+          setTaskStatus("SUCCESS");
+          es.close();
+          esRef.current = null;
+        } else if (event.type === "error") {
+          streamDone = true;
+          setError(event.message);
+          setUiState("error");
+          setTaskStatus("FAILED");
+          es.close();
+          esRef.current = null;
+        }
+      });
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Not authenticated");
+      setUiState("error");
+      return;
+    }
+
+    es.onerror = () => {
+      if (!streamDone) {
+        streamDone = true;
+        setError("Lost connection to analysis stream");
+        setUiState("error");
+        setTaskStatus("FAILED");
+        esRef.current = null;
+      }
+    };
+
+    esRef.current = es;
+  }, []);
+
+  /**
+   * Poll for Task A state (planner → WAITING_FOR_INPUT).
+   * Once Task B starts (PROCESSING after WAITING_FOR_INPUT), hands off to SSE.
+   * Also handles the cached-result fast path (immediate SUCCESS).
+   */
   const startPolling = useCallback((id: string) => {
+    prevPollStatusRef.current = "PENDING";
     pollRef.current = setInterval(async () => {
       try {
         const data = await api.getTaskStatus(id);
+        const prev = prevPollStatusRef.current;
+        prevPollStatusRef.current = data.status as TaskStatus;
         setTaskStatus(data.status as TaskStatus);
 
         if (data.status === "WAITING_FOR_INPUT") {
-          // Don't stop polling — just surface the sub-questions for review.
-          // The interval keeps running so the timeout auto-approve in the
-          // backend still works when the user eventually polls.
           if (data.sub_questions && data.sub_questions.length > 0) {
             setSubQuestions(data.sub_questions);
           }
         } else if (data.status === "SUCCESS") {
+          // Cached result — no Task B was run so no SSE stream exists.
           stopPolling();
           setResult(data.result);
           setAnalysisId(data.analysis_id ?? null);
@@ -72,6 +152,10 @@ export default function AnalysisPage() {
           stopPolling();
           setError(data.error ?? "Analysis failed");
           setUiState("error");
+        } else if (data.status === "PROCESSING" && prev === "WAITING_FOR_INPUT") {
+          // HITL auto-approved (10-min timeout) — switch from polling to SSE.
+          stopPolling();
+          openStream(id);
         }
       } catch {
         stopPolling();
@@ -79,7 +163,7 @@ export default function AnalysisPage() {
         setUiState("error");
       }
     }, 2000);
-  }, []);
+  }, [stopPolling, openStream]);
 
   const handleSubmit = useCallback(async () => {
     if (!query.trim() || uiState === "running") return;
@@ -89,9 +173,10 @@ export default function AnalysisPage() {
     setResult(null);
     setError(null);
     setSubQuestions([]);
+    setStreamingText("");
+    setActiveNode(null);
 
     try {
-      console.log('[portfolio] Submitting analysis:', { query: query.trim().slice(0, 60), include_portfolio: includePortfolio });
       const { task_id } = await api.analyzeQuery(query.trim(), includePortfolio);
       setTaskId(task_id);
       startPolling(task_id);
@@ -105,16 +190,20 @@ export default function AnalysisPage() {
     if (!taskId) return;
     try {
       await api.approvePlan(taskId, questions);
-      // Status will transition to PROCESSING on the next poll — no need to update locally
+      // Stop polling immediately and open the SSE stream — Task B is now running.
+      stopPolling();
+      setTaskStatus("PROCESSING");
+      openStream(taskId);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to approve plan");
       setUiState("error");
       stopPolling();
     }
-  }, [taskId]);
+  }, [taskId, stopPolling, openStream]);
 
   const handleReset = () => {
     stopPolling();
+    closeStream();
     setQuery("");
     setUiState("idle");
     setResult(null);
@@ -123,6 +212,8 @@ export default function AnalysisPage() {
     setTaskStatus("PENDING");
     setSubQuestions([]);
     setTaskId(null);
+    setStreamingText("");
+    setActiveNode(null);
   };
 
   const running = uiState === "running";
@@ -243,10 +334,21 @@ export default function AnalysisPage() {
           error={error}
           subQuestions={subQuestions}
           onApprove={handleApprove}
+          activeNode={activeNode ?? undefined}
         />
       )}
 
-      {/* Results */}
+      {/* Live streaming preview — shown once SSE token/node events start arriving */}
+      {running && (streamingText.length > 0 || activeNode != null) && (
+        <ResultsDisplay
+          query={query}
+          isStreaming
+          streamingText={streamingText}
+          activeNode={activeNode ?? undefined}
+        />
+      )}
+
+      {/* Final structured results after stream completes */}
       {uiState === "done" && result && (
         <ResultsDisplay result={result} query={query} analysisId={analysisId} />
       )}

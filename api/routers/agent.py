@@ -20,6 +20,7 @@ GET  /agent/history       — paginated analysis history
 DELETE /agent/history/{id} — delete a single history entry
 """
 
+import asyncio
 import json
 import logging
 import uuid
@@ -27,10 +28,13 @@ from datetime import datetime, timezone
 
 import redis.asyncio as aioredis
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
+from sse_starlette.sse import EventSourceResponse
 
 from api.core.query_cache import get_cached_result
 from api.core.redis_client import get_redis
+from api.core.security import decode_access_token
 from api.dependencies import check_rate_limit, db_session, get_current_user
 from api.schemas.agent import (
     AnalyzeRequest,
@@ -237,6 +241,139 @@ async def approve_plan(
         task_id, current_user.id, len(body.sub_questions),
     )
     return TaskStatusResponse(task_id=task_id, status="PROCESSING")
+
+
+@router.get(
+    "/stream/{task_id}",
+    summary="Real-time SSE stream of token events and node transitions for a running task",
+)
+async def stream_task(
+    task_id: str,
+    token: str = Query(
+        ...,
+        description=(
+            "JWT access token. Browser EventSource cannot send Authorization headers, "
+            "so the token is accepted as a query parameter for this endpoint only."
+        ),
+    ),
+    redis_client: aioredis.Redis = Depends(get_redis),
+) -> Response:
+    """
+    Subscribe to real-time events for an in-progress analysis task via SSE.
+
+    Connect before or after Task B starts — already-completed tasks are served
+    immediately from Redis state without requiring Pub/Sub delivery.
+
+    Event types (SSE `data` field, JSON-encoded):
+      {"type": "node_start", "node": "<name>"}                     — pipeline stage begins
+      {"type": "token",      "content": "<text>"}                  — LLM token chunk
+      {"type": "complete",   "analysis_id": "...", "output": {...}} — final result ready
+      {"type": "error",      "message": "..."}                     — task failed / timed out
+
+    Authentication: pass the JWT access token as ?token=<value> since the
+    browser's native EventSource API cannot send custom request headers.
+    """
+    # Validate the query-param token — raises HTTP 401 on failure.
+    token_payload = decode_access_token(token)
+    try:
+        token_user_id = str(uuid.UUID(token_payload["sub"]))
+    except (ValueError, KeyError):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token payload",
+        )
+
+    async def generate():
+        # ── Fast path: task already finished ────────────────────────────────
+        # Pub/Sub delivers no history, so late-connecting clients read from
+        # the Redis task-state key instead of waiting on the channel.
+        raw = await redis_client.get(f"task:{task_id}")
+        if raw is None:
+            yield {"data": json.dumps({"type": "error", "message": "Task not found or expired"})}
+            return
+
+        task_data = json.loads(raw)
+
+        # Ownership check — task state carries the submitting user's id.
+        stored_user_id = task_data.get("user_id", "")
+        if stored_user_id and stored_user_id != token_user_id:
+            yield {"data": json.dumps({"type": "error", "message": "Forbidden"})}
+            return
+
+        task_status = task_data.get("status", "")
+        if task_status == "SUCCESS":
+            yield {"data": json.dumps({
+                "type":        "complete",
+                "analysis_id": task_data.get("analysis_id"),
+                "output":      task_data.get("result"),
+            })}
+            return
+        if task_status == "FAILED":
+            yield {"data": json.dumps({
+                "type":    "error",
+                "message": task_data.get("error", "Task failed"),
+            })}
+            return
+
+        # ── Live path: subscribe to Redis Pub/Sub ───────────────────────────
+        # A dedicated connection is required — subscribing to a channel puts a
+        # redis-py connection into Pub/Sub mode where normal commands are blocked.
+        _ssl_kwargs: dict = (
+            {"ssl_cert_reqs": None} if settings.redis_url.startswith("rediss://") else {}
+        )
+        pub_client = aioredis.from_url(
+            settings.redis_url, decode_responses=True, **_ssl_kwargs
+        )
+        pubsub = pub_client.pubsub()
+        await pubsub.subscribe(f"stream:{task_id}")
+
+        loop = asyncio.get_running_loop()
+        # Hard cap: 5 minutes total per SSE connection.
+        total_deadline = loop.time() + 300
+        # Per-message wait: 2 minutes covers the longest single-node processing time.
+        per_message_timeout = 120.0
+
+        listen_iter = pubsub.listen().__aiter__()
+
+        try:
+            while True:
+                if loop.time() > total_deadline:
+                    yield {"data": json.dumps({"type": "error", "message": "Stream timeout"})}
+                    break
+
+                try:
+                    message = await asyncio.wait_for(
+                        listen_iter.__anext__(), timeout=per_message_timeout
+                    )
+                except asyncio.TimeoutError:
+                    yield {"data": json.dumps({
+                        "type":    "error",
+                        "message": "No events received — stream timed out",
+                    })}
+                    break
+                except StopAsyncIteration:
+                    break
+
+                if message["type"] != "message":
+                    continue  # skip subscribe/unsubscribe confirmation messages
+
+                yield {"data": message["data"]}
+
+                try:
+                    msg = json.loads(message["data"])
+                    if msg.get("type") in ("complete", "error"):
+                        break
+                except json.JSONDecodeError:
+                    pass
+
+        except asyncio.CancelledError:
+            pass  # client disconnected — cleanup runs in finally
+        finally:
+            await pubsub.unsubscribe(f"stream:{task_id}")
+            await pubsub.aclose()
+            await pub_client.aclose()
+
+    return EventSourceResponse(generate())
 
 
 @router.get(
