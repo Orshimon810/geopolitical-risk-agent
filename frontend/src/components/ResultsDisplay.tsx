@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useRef, useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { AlertTriangle, BarChart2, Lightbulb, GitBranch, BookOpen, Map, Briefcase, ThumbsUp, ThumbsDown, Loader2 } from "lucide-react";
 import { MarketSignals } from "@/components/MarketSignals";
@@ -8,9 +8,87 @@ import { api } from "@/lib/api";
 import type { AnalysisResult, Confidence, PortfolioHoldingImpact, Verdict } from "@/lib/types";
 
 interface ResultsDisplayProps {
-  result: AnalysisResult;
+  result?: AnalysisResult | null;
   query: string;
   analysisId?: string | null;
+  /** Accumulated token chunks from the SSE stream */
+  streamingText?: string;
+  /** True while Task B SSE stream is still open */
+  isStreaming?: boolean;
+  /** Currently-executing pipeline node name from SSE node_start events */
+  activeNode?: string;
+}
+
+const NODE_STATUS_LABELS: Record<string, string> = {
+  rag_research:          "Retrieving evidence from corpus",
+  signals:               "Fetching live market signals",
+  analysis:              "Synthesizing geopolitical analysis",
+  consistency_validator: "Validating portfolio consistency",
+  reviewer:              "Running quality review",
+  final_output:          "Finalizing report",
+};
+
+function StreamingView({
+  query,
+  streamingText,
+  activeNode,
+}: {
+  query: string;
+  streamingText: string;
+  activeNode?: string;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [streamingText]);
+
+  const nodeLabel = activeNode ? (NODE_STATUS_LABELS[activeNode] ?? activeNode) : null;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      transition={{ duration: 0.3 }}
+      className="rounded-xl border border-amber-800/30 bg-slate-900 overflow-hidden"
+    >
+      {/* Header */}
+      <div className="px-6 py-4 border-b border-slate-800 flex items-center justify-between gap-4">
+        <div className="min-w-0">
+          <p className="text-[9px] text-amber-600/70 uppercase tracking-[0.18em] data-mono mb-1.5">
+            LIVE ANALYSIS
+          </p>
+          <p className="text-sm text-slate-400 leading-relaxed line-clamp-2">{query}</p>
+        </div>
+        {nodeLabel && (
+          <div className="flex items-center gap-2 shrink-0 rounded-md border border-amber-800/30 bg-amber-500/5 px-2.5 py-1.5">
+            <span className="h-1.5 w-1.5 rounded-full bg-amber-500 animate-pulse shrink-0" />
+            <span className="text-[10px] text-amber-400/80 data-mono">{nodeLabel}</span>
+          </div>
+        )}
+      </div>
+
+      {/* Streaming token output */}
+      <div
+        ref={scrollRef}
+        className="px-6 py-5 h-52 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent"
+      >
+        {streamingText ? (
+          <pre className="text-xs text-slate-400 leading-relaxed whitespace-pre-wrap break-words font-mono">
+            {streamingText}
+            <span className="inline-block h-3 w-1.5 bg-amber-400 cursor-blink ml-0.5 align-text-bottom" />
+          </pre>
+        ) : (
+          <div className="flex items-center gap-2 text-xs text-slate-600 data-mono">
+            <span className="h-1.5 w-1.5 rounded-full bg-amber-500/60 animate-pulse" />
+            Waiting for LLM output&hellip;
+          </div>
+        )}
+      </div>
+    </motion.div>
+  );
 }
 
 type FeedbackState = "idle" | "loading" | "submitted" | "error";
@@ -227,7 +305,17 @@ function PortfolioImpactCard({ impact }: { impact: PortfolioHoldingImpact }) {
   );
 }
 
-export function ResultsDisplay({ result, query, analysisId }: ResultsDisplayProps) {
+export function ResultsDisplay({ result, query, analysisId, streamingText, isStreaming, activeNode }: ResultsDisplayProps) {
+  if (isStreaming) {
+    return (
+      <StreamingView
+        query={query}
+        streamingText={streamingText ?? ""}
+        activeNode={activeNode}
+      />
+    );
+  }
+  if (!result) return null;
   return (
     <motion.div
       initial={{ opacity: 0 }}

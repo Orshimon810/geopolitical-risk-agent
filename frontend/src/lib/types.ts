@@ -84,6 +84,12 @@ export interface TaskStatusResponse {
   analysis_id?: string | null;
 }
 
+export type StreamEvent =
+  | { type: "node_start"; node: string }
+  | { type: "token"; content: string }
+  | { type: "complete"; analysis_id: string | null; output: AnalysisResult }
+  | { type: "error"; message: string };
+
 export interface FeedbackRequest {
   score: 0 | 1;
   comment?: string;

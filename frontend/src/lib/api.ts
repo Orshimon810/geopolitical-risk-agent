@@ -1,4 +1,4 @@
-import type { FeedbackResponse, PortfolioHolding, TaskStatusResponse } from "./types";
+import type { FeedbackResponse, PortfolioHolding, StreamEvent, TaskStatusResponse } from "./types";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -175,5 +175,29 @@ export const api = {
     return apiFetch<{ ticker: string; price: number | null; currency: string }[]>(
       `/portfolio/quotes?tickers=${encodeURIComponent(tickers.join(","))}`
     );
+  },
+
+  /**
+   * Open a Server-Sent Events stream for a running task.
+   * Returns the EventSource so the caller can close it on cleanup.
+   * The JWT is read from localStorage and sent as a query param because
+   * the browser EventSource API cannot set Authorization headers.
+   */
+  streamAnalysis(
+    taskId: string,
+    onEvent: (event: StreamEvent) => void,
+  ): EventSource {
+    const token = getToken();
+    if (!token) throw new Error("Not authenticated");
+    const url = `${API_BASE}/agent/stream/${encodeURIComponent(taskId)}?token=${encodeURIComponent(token)}`;
+    const es = new EventSource(url);
+    es.onmessage = (e: MessageEvent) => {
+      try {
+        onEvent(JSON.parse(e.data) as StreamEvent);
+      } catch {
+        // ignore malformed frames
+      }
+    };
+    return es;
   },
 };

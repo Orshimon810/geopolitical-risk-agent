@@ -11,13 +11,23 @@ Two-task HITL pattern (no external checkpointer — Redis-only):
   resume_geopolitical_agent_task  (Task B)
     Reads the approved plan from Redis, builds a resume graph that starts at
     rag_research (skipping the planner), and runs the full pipeline through
-    to final_output. Writes SUCCESS/FAILED to Redis and persists to the DB.
+    to final_output.
+
+    Streaming: instead of graph.invoke(), Task B uses graph.astream_events()
+    (version="v2") inside an async coroutine. Token chunks and node-start
+    events are published to the Redis Pub/Sub channel stream:{task_id} so
+    FastAPI's GET /agent/stream/{task_id} SSE endpoint can relay them to the
+    browser in real time.
+
+    After streaming completes the result is persisted to analysis_history and
+    a "complete" packet (with analysis_id) is published to the channel.
 
 Both tasks share the same task_id so the client polls the same endpoint
 throughout the entire flow.
 """
 
 import asyncio
+import concurrent.futures
 import json
 import logging
 import ssl
@@ -35,6 +45,17 @@ from api.worker.celery_app import celery_app
 from georisk_agent.app.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Pipeline node names registered in build_resume_graph() — used to filter
+# on_chain_start events so only meaningful progress updates are published.
+_PIPELINE_NODES: frozenset[str] = frozenset({
+    "rag_research",
+    "signals",
+    "analysis",
+    "consistency_validator",
+    "reviewer",
+    "final_output",
+})
 
 
 class _TokenCounter(BaseCallbackHandler):
@@ -89,8 +110,14 @@ def _persist_analysis(
     duration_ms: int | None = None,
     langsmith_run_id: uuid.UUID | None = None,
 ) -> uuid.UUID | None:
-    """Persist the analysis and return the newly created analysis_id, or None on failure."""
-    import concurrent.futures
+    """
+    Persist the analysis from a synchronous context and return the new
+    analysis_id, or None on failure.
+
+    Task B no longer calls this directly — it persists inline inside its own
+    async coroutine. This helper is kept for use from scripts or future callers
+    that run outside an async event loop.
+    """
     from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
     from georisk_agent.db.dal import save_analysis
 
@@ -206,8 +233,15 @@ def run_geopolitical_agent_task(
 def resume_geopolitical_agent_task(self, original_task_id: str, user_id: str) -> dict:
     """
     Task B — resumes analysis after HITL approval.
-    Reads the approved plan from Redis task state, then invokes build_resume_graph()
-    which starts at rag_research (skipping the planner entirely).
+
+    Reads the approved plan from Redis task state, then streams the full
+    pipeline via graph.astream_events() — publishing token chunks and node
+    progress events to the Redis Pub/Sub channel stream:{task_id} for real-
+    time delivery to the browser via GET /agent/stream/{task_id}.
+
+    On completion the result is persisted to analysis_history and the final
+    "complete" packet (including analysis_id) is published to the channel
+    before the Redis task state is updated to SUCCESS.
     """
     r = _sync_redis()
 
@@ -223,46 +257,182 @@ def resume_geopolitical_agent_task(self, original_task_id: str, user_id: str) ->
     approved_plan = task_state.get("approved_plan") or task_state.get("sub_questions", [])
     portfolio     = task_state.get("portfolio")  # None when not a portfolio analysis run
 
-    try:
-        from georisk_agent.agents.graph import build_resume_graph
+    from georisk_agent.agents.graph import build_resume_graph
+    graph = build_resume_graph()
 
-        graph = build_resume_graph()
-        initial_state: dict = {
-            "query":             query,
-            "plan":              task_state.get("sub_questions", []),
-            "user_approved_plan": approved_plan,
-            "hitl_status":       "APPROVED",
-            "retry_count":       0,
-            "max_retries":       settings.max_retries,
-            "review_log":        [],
-            "rewritten_queries": [],
-            "data_contradictions": [],
-        }
-        if portfolio is not None:
-            initial_state["portfolio"] = portfolio
+    initial_state: dict = {
+        "query":               query,
+        "plan":                task_state.get("sub_questions", []),
+        "user_approved_plan":  approved_plan,
+        "hitl_status":         "APPROVED",
+        "retry_count":         0,
+        "max_retries":         settings.max_retries,
+        "review_log":          [],
+        "rewritten_queries":   [],
+        "data_contradictions": [],
+    }
+    if portfolio is not None:
+        initial_state["portfolio"] = portfolio
 
-        # Pre-generate the run_id so we control the root trace ID in LangSmith.
-        # Passing it via config["run_id"] makes LangSmith use this exact UUID as
-        # the root span, which we then store in analysis_history for feedback linking.
+    channel = f"stream:{original_task_id}"
+
+    async def _run_and_stream() -> dict[str, Any]:
+        """
+        Run the resume graph with astream_events, publishing events to Redis
+        Pub/Sub as they arrive.  Persists the result to the DB inside this
+        async context (avoids a nested ThreadPoolExecutor) and publishes a
+        final "complete" packet containing the analysis_id.
+
+        Returns a summary dict for the synchronous Task B body.
+        """
+        import redis.asyncio as aioredis
+        from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+        from georisk_agent.db.dal import save_analysis
+
+        _ssl_kwargs: dict = (
+            {"ssl_cert_reqs": None} if settings.redis_url.startswith("rediss://") else {}
+        )
+        pub_client = aioredis.from_url(
+            settings.redis_url, decode_responses=True, **_ssl_kwargs
+        )
+
         langsmith_run_id = uuid.uuid4()
-
         counter = _TokenCounter()
         t0 = time.perf_counter()
-        final_state: dict = graph.invoke(
-            initial_state,
-            config={"callbacks": [counter], "run_id": str(langsmith_run_id)},
-        )
-        duration_ms = int((time.perf_counter() - t0) * 1000)
-        tokens_used = counter.total_tokens or None
+        final_state: dict = {}
 
-        result = _extract_result(final_state)
+        try:
+            async for event in graph.astream_events(
+                initial_state,
+                config={"callbacks": [counter], "run_id": str(langsmith_run_id)},
+                version="v2",
+            ):
+                kind = event["event"]
+                name = event.get("name", "")
 
-        _patch_task_state(r, original_task_id, {
+                if kind == "on_chat_model_stream":
+                    chunk = event["data"].get("chunk")
+                    content = getattr(chunk, "content", "") if chunk else ""
+                    if content:
+                        await pub_client.publish(
+                            channel,
+                            json.dumps({"type": "token", "content": content}),
+                        )
+
+                elif kind == "on_chain_start" and name in _PIPELINE_NODES:
+                    await pub_client.publish(
+                        channel,
+                        json.dumps({"type": "node_start", "node": name}),
+                    )
+
+                elif kind == "on_chain_end" and name == "final_output":
+                    # final_output_node returns the full cleaned state dict.
+                    output = event["data"].get("output")
+                    if isinstance(output, dict):
+                        final_state = output
+
+            duration_ms = int((time.perf_counter() - t0) * 1000)
+            tokens_used = counter.total_tokens or None
+            result = _extract_result(final_state)
+
+            # ── Persist to DB (native async — no ThreadPoolExecutor needed) ──
+            analysis_id: str | None = None
+            try:
+                ssl_ctx = ssl.create_default_context()
+                engine = create_async_engine(
+                    settings.database_url,
+                    pool_size=1,
+                    max_overflow=0,
+                    connect_args={"ssl": ssl_ctx},
+                )
+                try:
+                    factory = async_sessionmaker(
+                        bind=engine,
+                        class_=AsyncSession,
+                        expire_on_commit=False,
+                        autoflush=False,
+                    )
+                    async with factory() as session:
+                        record = await save_analysis(
+                            session,
+                            user_id=uuid.UUID(user_id) if user_id else None,
+                            query=query,
+                            report=result,
+                            confidence=result["confidence"],
+                            tokens_used=tokens_used,
+                            duration_ms=duration_ms,
+                            langsmith_run_id=langsmith_run_id,
+                        )
+                        await session.commit()
+                        analysis_id = str(record.id)
+                finally:
+                    await engine.dispose()
+            except Exception as persist_exc:
+                logger.warning(
+                    "Task B DB persist failed (non-fatal): %s",
+                    persist_exc,
+                    exc_info=True,
+                    extra={"task_id": original_task_id},
+                )
+
+            # Publish the complete packet — includes analysis_id so the UI can
+            # link feedback to the correct LangSmith trace immediately.
+            await pub_client.publish(
+                channel,
+                json.dumps({
+                    "type":        "complete",
+                    "analysis_id": analysis_id,
+                    "output":      result,
+                }),
+            )
+
+            return {
+                "result":           result,
+                "analysis_id":      analysis_id,
+                "duration_ms":      duration_ms,
+                "tokens_used":      tokens_used,
+                "langsmith_run_id": langsmith_run_id,
+            }
+
+        except Exception as exc:
+            # Notify any SSE subscribers before re-raising so the frontend
+            # can stop waiting instead of hitting the 2-minute per-message timeout.
+            try:
+                await pub_client.publish(
+                    channel,
+                    json.dumps({"type": "error", "message": str(exc)}),
+                )
+            except Exception:
+                pass
+            raise
+
+        finally:
+            await pub_client.aclose()
+
+    try:
+        # Run the async streaming coroutine in a dedicated thread so it gets a
+        # fresh event loop — avoids conflicts with any loop Celery may hold in
+        # the worker process (same pattern as the legacy _persist_analysis helper).
+        coro = _run_and_stream()
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            run_result: dict[str, Any] = pool.submit(asyncio.run, coro).result(timeout=3600)
+
+        result           = run_result["result"]
+        analysis_id      = run_result["analysis_id"]
+        duration_ms      = run_result["duration_ms"]
+        tokens_used      = run_result["tokens_used"]
+        langsmith_run_id = run_result["langsmith_run_id"]
+
+        patch: dict = {
             "status":       "SUCCESS",
             "result":       result,
             "completed_at": datetime.now(timezone.utc).isoformat(),
             "cached":       False,
-        })
+        }
+        if analysis_id:
+            patch["analysis_id"] = analysis_id
+        _patch_task_state(r, original_task_id, patch)
+
         logger.info(
             "Task B SUCCESS",
             extra={
@@ -275,36 +445,19 @@ def resume_geopolitical_agent_task(self, original_task_id: str, user_id: str) ->
             },
         )
 
-        # Portfolio results are user-specific — never write them to the shared query cache.
+        # Portfolio results are user-specific — never write to the shared query cache.
         if portfolio is None:
             set_cached_result_sync(r, query, result, settings.query_cache_ttl_seconds)
 
-        try:
-            analysis_id = _persist_analysis(
-                user_id=user_id,
-                query=query,
-                result=result,
-                tokens_used=tokens_used,
-                duration_ms=duration_ms,
-                langsmith_run_id=langsmith_run_id,
-            )
-            if analysis_id is not None:
-                _patch_task_state(r, original_task_id, {"analysis_id": str(analysis_id)})
+        if analysis_id:
             logger.info(
                 "Task B persisted to analysis_history",
                 extra={
                     "task_id":     original_task_id,
-                    "analysis_id": str(analysis_id) if analysis_id else None,
+                    "analysis_id": analysis_id,
                     "tokens_used": tokens_used,
                     "duration_ms": duration_ms,
                 },
-            )
-        except Exception as persist_exc:
-            logger.warning(
-                "Task B DB persist failed (non-fatal): %s",
-                persist_exc,
-                exc_info=True,
-                extra={"task_id": original_task_id},
             )
 
         return result
