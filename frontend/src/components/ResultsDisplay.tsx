@@ -81,9 +81,9 @@ function StreamingView({
             <span className="inline-block h-3 w-1.5 bg-amber-400 cursor-blink ml-0.5 align-text-bottom" />
           </pre>
         ) : (
-          <div className="flex items-center gap-2 text-xs text-slate-600 data-mono">
-            <span className="h-1.5 w-1.5 rounded-full bg-amber-500/60 animate-pulse" />
-            Waiting for LLM output&hellip;
+          <div className="flex items-start gap-2.5 text-xs text-slate-600 data-mono">
+            <span className="h-1.5 w-1.5 rounded-full bg-amber-500/60 animate-pulse mt-1 shrink-0" />
+            <span>{nodeLabel ? `${nodeLabel}…` : "Pipeline executing…"}</span>
           </div>
         )}
       </div>
