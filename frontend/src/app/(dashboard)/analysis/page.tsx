@@ -38,6 +38,10 @@ export default function AnalysisPage() {
   const esRef   = useRef<EventSource | null>(null);
   // Tracks the last-seen poll status so we can detect WAITING→PROCESSING for auto-approve.
   const prevPollStatusRef = useRef<TaskStatus>("PENDING");
+  // Set to true when SSE fails so the polling loop doesn't re-open the stream.
+  const sseFallbackRef = useRef(false);
+  // Holds the latest startPolling function — breaks the circular dep between openStream and startPolling.
+  const startPollingRef = useRef<(id: string) => void>(() => {});
 
   const [includePortfolio, setIncludePortfolio] = useState(false);
   const [portfolioCount, setPortfolioCount]     = useState<number | null>(null);
@@ -76,6 +80,10 @@ export default function AnalysisPage() {
   /**
    * Opens an SSE stream for Task B.  Handles all stream events and cleans up
    * the EventSource when the stream finishes (complete/error) or on unmount.
+   *
+   * On onerror the stream silently degrades to polling — this covers CORS
+   * failures, auth errors, network blips, and the browser's normal reconnect
+   * attempt that fires after the server closes the connection on completion.
    */
   const openStream = useCallback((id: string) => {
     let streamDone = false;
@@ -112,13 +120,15 @@ export default function AnalysisPage() {
     }
 
     es.onerror = () => {
-      if (!streamDone) {
-        streamDone = true;
-        setError("Lost connection to analysis stream");
-        setUiState("error");
-        setTaskStatus("FAILED");
-        esRef.current = null;
-      }
+      if (streamDone) return;
+      // Close the broken stream and gracefully degrade to polling.
+      // This handles: CORS failures, auth errors, server closes the connection
+      // after the final event (EventSource auto-retries, firing onerror), and
+      // any other transport-level failures.
+      es.close();
+      esRef.current = null;
+      sseFallbackRef.current = true;
+      startPollingRef.current(id);
     };
 
     esRef.current = es;
@@ -126,7 +136,8 @@ export default function AnalysisPage() {
 
   /**
    * Poll for Task A state (planner → WAITING_FOR_INPUT).
-   * Once Task B starts (PROCESSING after WAITING_FOR_INPUT), hands off to SSE.
+   * Once Task B starts (PROCESSING after WAITING_FOR_INPUT), hands off to SSE
+   * — unless we're already in SSE-fallback mode, in which case we keep polling.
    * Also handles the cached-result fast path (immediate SUCCESS).
    */
   const startPolling = useCallback((id: string) => {
@@ -143,7 +154,6 @@ export default function AnalysisPage() {
             setSubQuestions(data.sub_questions);
           }
         } else if (data.status === "SUCCESS") {
-          // Cached result — no Task B was run so no SSE stream exists.
           stopPolling();
           setResult(data.result);
           setAnalysisId(data.analysis_id ?? null);
@@ -152,8 +162,9 @@ export default function AnalysisPage() {
           stopPolling();
           setError(data.error ?? "Analysis failed");
           setUiState("error");
-        } else if (data.status === "PROCESSING" && prev === "WAITING_FOR_INPUT") {
+        } else if (data.status === "PROCESSING" && prev === "WAITING_FOR_INPUT" && !sseFallbackRef.current) {
           // HITL auto-approved (10-min timeout) — switch from polling to SSE.
+          // Skipped when sseFallbackRef is set (SSE already failed, stay on polling).
           stopPolling();
           openStream(id);
         }
@@ -165,6 +176,11 @@ export default function AnalysisPage() {
     }, 2000);
   }, [stopPolling, openStream]);
 
+  // Keep the ref current so openStream's onerror can call it without a circular dep.
+  useEffect(() => {
+    startPollingRef.current = startPolling;
+  }, [startPolling]);
+
   const handleSubmit = useCallback(async () => {
     if (!query.trim() || uiState === "running") return;
 
@@ -175,6 +191,7 @@ export default function AnalysisPage() {
     setSubQuestions([]);
     setStreamingText("");
     setActiveNode(null);
+    sseFallbackRef.current = false;
 
     try {
       const { task_id } = await api.analyzeQuery(query.trim(), includePortfolio);
@@ -204,6 +221,7 @@ export default function AnalysisPage() {
   const handleReset = () => {
     stopPolling();
     closeStream();
+    sseFallbackRef.current = false;
     setQuery("");
     setUiState("idle");
     setResult(null);
