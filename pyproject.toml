@@ -19,6 +19,7 @@ dependencies = [
   # --- Web framework ---
   "fastapi>=0.111.0",
   "uvicorn[standard]>=0.30.0",
+  "sse-starlette>=1.6.1",        # Server-Sent Events streaming responses
   "email-validator>=2.1.0",      # Pydantic EmailStr validation
 
   # --- PostgreSQL / pgvector data layer ---
