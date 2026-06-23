@@ -10,8 +10,8 @@ The project has two layers:
 - **`src/georisk_agent/`** — the core agent library (LangGraph pipeline, RAG, DB, news)
 - **`api/`** — async FastAPI REST API with JWT auth, Redis rate limiting, query caching, and Celery task queue
 
-For pipeline internals, HITL lifecycle, streaming/SSE details, and the full API surface, see [@docs/architecture.md](docs/architecture.md).
-For a map of key files, see [@docs/file-map.md](docs/file-map.md).
+For pipeline internals, HITL lifecycle, streaming/SSE details, and the full API surface, see docs/architecture.md.
+For a map of key files, see docs/file-map.md.
 
 ## Commands
 
@@ -78,7 +78,7 @@ alembic current               # show current revision
 
 ## Pipeline Nodes (orientation)
 
-Seven nodes in sequence; details in [@docs/architecture.md](docs/architecture.md):
+Seven nodes in sequence; details in docs/architecture.md:
 
 1. **Planner** — decomposes query into 4-6 sub-questions
 2. **RAG Research** — pgvector retrieval + ephemeral news + Tavily fallback per sub-question
