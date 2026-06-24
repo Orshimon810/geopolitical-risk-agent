@@ -92,6 +92,20 @@ def _build_reviewer_prompt(state: DynamicAgentState, reason: str) -> str:
         if d.get("status") == "ok"
     )
 
+    # H-F: Surface scenario polarity conflicts detected by the consistency validator.
+    debug = state.get("debug") or {}
+    polarity_conflicts: list[str] = (
+        (debug.get("consistency_check") or {}).get("scenario_polarity_conflicts") or []
+    )
+    polarity_block = ""
+    if polarity_conflicts:
+        lines = "\n".join(f"  - {c}" for c in polarity_conflicts)
+        polarity_block = (
+            f"\nScenario polarity conflicts detected by consistency validator:\n{lines}\n"
+            "Consider whether these conflicts indicate a genuine analysis error or a valid "
+            "divergence (e.g. mixed portfolio with both commodity producers and consumers).\n"
+        )
+
     return f"""You are a senior research quality reviewer for a geopolitical risk analysis system.
 
 Sub-questions used for retrieval (cycle {retry_n}):
@@ -101,14 +115,15 @@ Evidence retrieved ({sq.get('total_chunks', 0)} chunks, {sq.get('sub_questions_a
 {evidence_summary if evidence_summary else "(none)"}
 
 Live market signals: {market_summary or "none"}
-
+{polarity_block}
 Current analysis confidence: {confidence}
 Review reason: {reason}
 
 Your tasks:
 1. Assess whether the retrieved evidence is sufficient to support a {confidence}-confidence conclusion.
 2. Identify contradictions between historical RAG evidence and live market signals.
-3. If evidence is thin or contradictions are severe, suggest 4-6 more targeted sub-questions
+3. If scenario polarity conflicts are listed above, note them in detected_contradictions.
+4. If evidence is thin or contradictions are severe, suggest 4-6 more targeted sub-questions
    that are more concrete and mechanism-focused than the originals.
 
 Verdict rules:
