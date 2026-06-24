@@ -12,10 +12,6 @@ __pycache__/
 # C extensions
 *.so
 
-# Vector DB (Chroma)
-.chroma/
-chroma/
-
 # RAG corpus (local data only)
 data/documents/*.pdf
 data/documents/*.txt
@@ -70,6 +66,9 @@ cover/
 # Translations
 *.mo
 *.pot
+
+# Application logs
+logs/
 
 # Django stuff:
 *.log
