@@ -218,6 +218,84 @@ Avoid defaulting to "Medium".
 
 
 # -------------------------
+# Domain checklist — topic → must-consider entities
+# -------------------------
+
+# Each entry maps a set of trigger keywords to a list of entities the analysis
+# MUST address if the topic is present. Injected as a "MUST ADDRESS" block in
+# the analysis prompt so the model cannot omit obvious chokepoints.
+_DOMAIN_CHECKLIST: list[tuple[frozenset, str, list[str]]] = [
+    (
+        frozenset({"hormuz", "strait of hormuz", "middle east", "iran", "gulf", "opec", "oil supply"}),
+        "Middle East / Oil supply chokepoints",
+        [
+            "Strait of Hormuz (20% of global oil transit — closure impact on Brent spread)",
+            "Bab el-Mandeb strait (Red Sea LNG/crude routing alternative)",
+            "LNG terminal capacity constraints (Qatar, UAE export flexibility)",
+        ],
+    ),
+    (
+        frozenset({"russia", "sanctions", "swift", "ukraine", "ruble"}),
+        "Russia / Sanctions transmission mechanisms",
+        [
+            "SWIFT exclusion mechanics and alternative payment rails (MIR, CIPS)",
+            "Capital controls and rouble convertibility constraints",
+            "Frozen reserve repatriation risk (EUR/USD-denominated assets)",
+            "Asset seizure precedent (sovereign immunity questions)",
+        ],
+    ),
+    (
+        frozenset({"semiconductor", "chip", "chips", "asml", "tsmc", "nvidia", "export control", "taiwan"}),
+        "Semiconductor supply-chain chokepoints",
+        [
+            "ASML EUV lithography monopoly (sole supplier of sub-7nm tools)",
+            "TSMC foundry concentration (>90% of sub-5nm logic production)",
+            "US export-control trigger points (Entity List, Foreign Direct Product Rule)",
+            "SMIC capacity ceiling under current controls",
+        ],
+    ),
+    (
+        frozenset({"turkey", "balkans", "turkstream", "bosphorus", "southern corridor", "nato balkans"}),
+        "Turkey / Balkans energy infrastructure",
+        [
+            "TurkStream pipeline capacity (15.75 bcm/yr to SE Europe)",
+            "Bosphorus Strait access (non-NATO tanker transit rules)",
+            "Southern Gas Corridor (Azerbaijan alternative to Russian gas)",
+            "Blue Stream pipeline dependence for Turkish domestic consumption",
+        ],
+    ),
+    (
+        frozenset({"tariff", "tariffs", "trade war", "trade wars", "wto", "supply chain disruption", "port congestion"}),
+        "Trade war / tariff transmission",
+        [
+            "Port congestion and container freight rate pass-through",
+            "Tariff cost pass-through to consumer prices (elasticity by sector)",
+            "Inventory buffer drawdown timelines (typical 60-90 day lag)",
+            "WTO dispute mechanism timeline vs. unilateral retaliation speed",
+        ],
+    ),
+]
+
+
+def _build_domain_checklist_block(query: str, plan: list[str]) -> str:
+    """Return a MUST ADDRESS prompt block for any topics detected in the query/plan."""
+    combined = (query + " " + " ".join(plan)).lower()
+    sections = []
+    for trigger_keywords, topic_label, entities in _DOMAIN_CHECKLIST:
+        if any(kw in combined for kw in trigger_keywords):
+            bullet_lines = "\n".join(f"    • {e}" for e in entities)
+            sections.append(f"  [{topic_label}]\n{bullet_lines}")
+    if not sections:
+        return ""
+    return (
+        "\nMUST ADDRESS IF RELEVANT — domain-specific chokepoints and mechanisms "
+        "(do not omit these if the topic appears in the query or evidence):\n"
+        + "\n".join(sections)
+        + "\n"
+    )
+
+
+# -------------------------
 # Commodity shock prompt block
 # -------------------------
 
@@ -611,6 +689,9 @@ def analysis_node(state: DynamicAgentState) -> DynamicAgentState:
                 + "\nExample: if Brent is $75.79, a +20% shock → ~$91, not '$90-$100'.\n"
             )
 
+    # Domain checklist — inject must-consider chokepoints for detected topics
+    domain_checklist_block = _build_domain_checklist_block(query, plan)
+
     # Build portfolio block for the main prompt (fallback path)
     portfolio_block = ""
     if portfolio:
@@ -641,6 +722,7 @@ Evidence:
 {signals_block}
 {benchmark_block}
 {live_anchor_block}
+{domain_checklist_block}
 {portfolio_block}
 
 Structural rules:

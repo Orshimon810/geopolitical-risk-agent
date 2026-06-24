@@ -53,20 +53,91 @@ COUNTRY_NAME_TO_ISO: dict[str, str] = _build_country_map()
 
 
 REGION_TO_ISOS = {
-    "middle east": ["SAU", "IRN", "IRQ", "ARE", "QAT"],
-    "gulf": ["SAU", "ARE", "QAT", "KWT", "BHR", "OMN"],
-    "opec": ["SAU", "IRN", "IRQ", "ARE", "KWT", "NGA", "VEN"],
-    "eastern europe": ["UKR", "RUS", "POL"],
-    "southeast asia": ["IDN", "MYS", "THA", "VNM"],
-    "latin america": ["BRA", "MEX", "VEN", "COL"],
-    "africa": ["NGA", "ZAF", "EGY"],
+    # Existing regions
+    "middle east":      ["SAU", "IRN", "IRQ", "ARE", "QAT"],
+    "gulf":             ["SAU", "ARE", "QAT", "KWT", "BHR", "OMN"],
+    "gcc":              ["SAU", "ARE", "QAT", "KWT", "BHR", "OMN"],
+    "opec":             ["SAU", "IRN", "IRQ", "ARE", "KWT", "NGA", "VEN"],
+    "eastern europe":   ["UKR", "RUS", "POL"],
+    "southeast asia":   ["IDN", "MYS", "THA", "VNM", "PHL"],
+    "asean":            ["IDN", "MYS", "THA", "VNM", "PHL", "SGP", "MMR"],
+    "latin america":    ["BRA", "MEX", "VEN", "COL", "ARG", "CHL", "PER"],
+    "latam":            ["BRA", "MEX", "VEN", "COL", "ARG", "CHL", "PER"],
+    "africa":           ["NGA", "ZAF", "EGY"],
+    # Extended blocs
+    "global south":     ["BRA", "IND", "IDN", "ZAF", "MEX", "ARG", "NGA", "EGY"],
+    "brics":            ["BRA", "RUS", "IND", "CHN", "ZAF", "EGY", "IRN", "SAU", "ARE"],
+    "emerging markets": ["BRA", "CHN", "IND", "IDN", "MEX", "ZAF", "TUR", "POL", "THA"],
+    "em":               ["BRA", "CHN", "IND", "IDN", "MEX", "ZAF", "TUR", "POL", "THA"],
+    "sub-saharan africa": ["NGA", "ZAF", "ETH", "KEN", "GHA", "TZA"],
+    "sub saharan africa": ["NGA", "ZAF", "ETH", "KEN", "GHA", "TZA"],
+    "south asia":       ["IND", "PAK", "BGD", "LKA"],
+    "sahel":            ["MLI", "NER", "BFA", "TCD", "MRT"],
+    "balkans":          ["SRB", "HRV", "BIH", "MKD", "ALB", "MNE"],
+    "western europe":   ["DEU", "FRA", "GBR", "ITA", "ESP", "NLD"],
+    "nato":             ["USA", "GBR", "DEU", "FRA", "POL", "TUR"],
+    "central asia":     ["KAZ", "UZB", "TKM", "KGZ", "TJK"],
 }
+
+# ISOs that belong to the Global North / developed world.
+# Used by the scope-mismatch guard to detect leakage when the query is
+# about emerging markets or the Global South.
+_GLOBAL_NORTH_ISOS = frozenset({
+    "USA", "GBR", "DEU", "FRA", "JPN", "CAN", "AUS", "NLD", "BEL",
+    "SWE", "NOR", "DNK", "FIN", "CHE", "AUT", "IRL", "NZL", "SGP",
+    "ISR", "KOR",
+})
+
+# Tokens that signal the query is EM/Global-South scoped.
+_EM_SCOPE_TOKENS = frozenset({
+    "global south", "emerging markets", "emerging market", "em bonds",
+    "em bond", "em equity", "em equities", "brics", "frontier markets",
+    "frontier market", "developing world", "developing countries",
+    "developing economies",
+})
 
 WORLD_BANK_API = "https://api.worldbank.org/v2/country/{country}/indicator/{indicator}?format=json"
 
 OIL_PRODUCER_ISOS = {
     "SAU", "IRN", "IRQ", "ARE", "QAT", "KWT", "BHR", "OMN",
     "RUS", "NGA", "VEN", "NOR", "LBY", "DZA", "KAZ",
+}
+
+# -------------------------
+# Thematic indicator config
+# -------------------------
+
+# Keyword sets that identify a query theme
+_THEME_KEYWORDS: Dict[str, frozenset] = {
+    "energy":     frozenset({"oil", "gas", "energy", "opec", "brent", "lng", "pipeline", "fuel", "petroleum"}),
+    "sovereign_debt": frozenset({"bond", "bonds", "debt", "sovereign", "yield", "yields", "credit rating", "default", "em bond", "em bonds"}),
+    "fx":         frozenset({"dollar", "usd", "currency", "fx", "forex", "exchange rate", "devaluation", "reserves", "em bond", "em bonds"}),
+    "trade":      frozenset({"trade", "tariff", "tariffs", "export", "imports", "wto", "supply chain", "port", "shipping"}),
+    "defense":    frozenset({"defense", "defence", "nato", "military", "arms", "weapon", "warfare", "sanctions"}),
+    "semiconductors": frozenset({"semiconductor", "chip", "chips", "asml", "tsmc", "nvidia", "foundry", "lithography", "export control"}),
+}
+
+# Extra World Bank indicators unlocked per theme (beyond trade_gdp default)
+_THEME_WB_INDICATORS: Dict[str, Dict[str, str]] = {
+    "sovereign_debt": {
+        "GC.DOD.TOTL.GD.ZS": "govt_debt_pct_gdp",
+        "FR.INR.RINR": "real_interest_rate",
+    },
+    "fx": {
+        "FI.RES.TOTL.CD": "fx_reserves_usd",
+    },
+    "defense": {
+        "MS.MIL.XPND.GD.ZS": "military_spend_pct_gdp",
+    },
+}
+
+# Extra market tickers unlocked per theme
+_THEME_TICKERS: Dict[str, Dict[str, str]] = {
+    "energy":     {"NG=F": "Natural Gas ($/MMBtu)", "XLE": "Energy Select ETF"},
+    "sovereign_debt": {"EMB": "EM Bond ETF (USD)", "HYG": "High-Yield Bond ETF"},
+    "fx":         {"EEM": "EM Equity ETF", "EMB": "EM Bond ETF (USD)", "UUP": "USD Bullish ETF"},
+    "defense":    {"ITA": "iShares US Aerospace & Defense ETF", "XAR": "SPDR Defense ETF"},
+    "semiconductors": {"SOXX": "iShares Semiconductor ETF", "TSM": "TSMC", "NVDA": "Nvidia"},
 }
 
 # -------------------------
@@ -99,11 +170,22 @@ COUNTRY_TICKERS: Dict[str, Dict[str, str]] = {
 }
 
 
-def build_tickers(isos: list[str]) -> Dict[str, str]:
-    """Build the full ticker dict for detected countries, always including core tickers."""
+def detect_themes(text: str) -> list[str]:
+    """Return the list of query themes detected from keyword matching."""
+    text_lower = text.lower()
+    return [
+        theme for theme, keywords in _THEME_KEYWORDS.items()
+        if any(kw in text_lower for kw in keywords)
+    ]
+
+
+def build_tickers(isos: list[str], themes: list[str] | None = None) -> Dict[str, str]:
+    """Build the full ticker dict for detected countries + themes, always including core tickers."""
     tickers = dict(CORE_TICKERS)
     for iso in isos:
         tickers.update(COUNTRY_TICKERS.get(iso, {}))
+    for theme in (themes or []):
+        tickers.update(_THEME_TICKERS.get(theme, {}))
     return tickers
 
 
@@ -216,8 +298,9 @@ def signals_node(state: DynamicAgentState) -> DynamicAgentState:
     """
     Context-aware External Signals Agent.
 
-    Detects relevant countries, fetches World Bank macro indicators,
-    and fetches live Yahoo Finance market prices (always core + query-specific).
+    Detects relevant countries and query themes, fetches World Bank macro
+    indicators (base + theme-specific), and fetches live Yahoo Finance market
+    prices (always core + country-specific + theme-specific).
     When state["portfolio"] is set, also fetches prices for portfolio tickers.
     """
     query = state.get("query", "")
@@ -226,6 +309,10 @@ def signals_node(state: DynamicAgentState) -> DynamicAgentState:
 
     combined_text = f"{query} {plan}"
     countries = extract_relevant_countries(combined_text)
+    themes = detect_themes(combined_text)
+
+    if themes:
+        logger.info("signals_node: detected themes=%s", themes)
 
     signals: Dict[str, Any] = {"countries": {}}
 
@@ -233,6 +320,11 @@ def signals_node(state: DynamicAgentState) -> DynamicAgentState:
         entry: Dict[str, Any] = {"trade_gdp": fetch_trade_gdp(iso)}
         if iso in OIL_PRODUCER_ISOS:
             entry["oil_rents"] = fetch_oil_rents(iso)
+        # Pull theme-specific World Bank indicators
+        for theme in themes:
+            for indicator_code, field_name in _THEME_WB_INDICATORS.get(theme, {}).items():
+                if field_name not in entry:
+                    entry[field_name] = _fetch_indicator(iso, indicator_code)
         return iso, entry
 
     if not countries:
@@ -244,7 +336,7 @@ def signals_node(state: DynamicAgentState) -> DynamicAgentState:
                 iso, entry = future.result()
                 signals["countries"][iso] = entry
 
-    tickers = build_tickers(countries)
+    tickers = build_tickers(countries, themes)
     signals["market_data"] = fetch_market_snapshot(tickers)
 
     if portfolio:
@@ -255,18 +347,33 @@ def signals_node(state: DynamicAgentState) -> DynamicAgentState:
 
 def extract_relevant_countries(text: str) -> list[str]:
     """
-    Country extraction based on keyword matching.
-    Handles both individual country names and region keywords.
+    Country extraction based on keyword matching with scope-mismatch guard.
+
+    Handles both individual country names and region keywords. When the query
+    is clearly EM/Global-South scoped but only Global North ISOs are detected
+    (leaked in from incidental plan text), the Global North entries are dropped.
     """
-    text = text.lower()
+    text_lower = text.lower()
     found = set()
 
     for name, iso in COUNTRY_NAME_TO_ISO.items():
-        if re.search(r'\b' + re.escape(name) + r'\b', text):
+        if re.search(r'\b' + re.escape(name) + r'\b', text_lower):
             found.add(iso)
 
     for region, isos in REGION_TO_ISOS.items():
-        if re.search(r'\b' + re.escape(region) + r'\b', text):
+        if re.search(r'\b' + re.escape(region) + r'\b', text_lower):
             found.update(isos)
+
+    # Scope-mismatch guard: if the query is EM/Global-South scoped but all
+    # detected ISOs are Global North, drop the Global North leakage so we don't
+    # return misleading indicators (e.g. USA trade stats for an EM bonds query).
+    is_em_scoped = any(token in text_lower for token in _EM_SCOPE_TOKENS)
+    if is_em_scoped and found and found.issubset(_GLOBAL_NORTH_ISOS):
+        logger.info(
+            "signals_node: scope-mismatch guard dropped Global North ISOs %s "
+            "— query is EM-scoped but no EM countries matched explicitly",
+            found,
+        )
+        found = set()
 
     return list(found)
