@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import json
 import logging
 from pathlib import Path
 from typing import List
@@ -15,6 +16,26 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
 _openai = OpenAI(api_key=settings.openai_api_key)
+
+
+def _load_source_manifest(dir_path: Path) -> dict:
+    """Load sources.json from the document directory. Returns {} if missing."""
+    manifest_path = dir_path / "sources.json"
+    if manifest_path.exists():
+        try:
+            return json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.warning("Could not load sources.json: %s", exc)
+    return {}
+
+
+def _display_title(file_name: str, manifest: dict) -> str:
+    """Return a human-readable title for a document file."""
+    entry = manifest.get(file_name)
+    if entry and entry.get("title"):
+        publisher = entry.get("publisher", "")
+        return f"{entry['title']} ({publisher})" if publisher else entry["title"]
+    return file_name
 
 
 def chunk_text(text: str, chunk_size: int = 400, overlap: int = 80) -> List[str]:
@@ -58,6 +79,7 @@ def _embed_batch(texts: List[str]) -> List[List[float]]:
 
 async def ingest_directory(dir_path: str) -> None:
     base_path = Path(dir_path)
+    manifest = _load_source_manifest(base_path)
     records = []
 
     for file_path in sorted(base_path.iterdir()):
@@ -78,24 +100,31 @@ async def ingest_directory(dir_path: str) -> None:
             logger.info("No chunks created for: %s", file_path.name)
             continue
 
-        logger.info("Embedding %d chunks from %s ...", len(chunks), file_path.name)
+        display_title = _display_title(file_path.name, manifest)
+        logger.info("Embedding %d chunks from %s ...", len(chunks), display_title)
 
         EMBED_BATCH = 64
         embeddings: List[List[float]] = []
         for i in range(0, len(chunks), EMBED_BATCH):
             embeddings.extend(_embed_batch(chunks[i : i + EMBED_BATCH]))
 
+        entry = manifest.get(file_path.name, {})
         for chunk, embedding in zip(chunks, embeddings):
             chunk_id = hashlib.sha256(chunk.encode()).hexdigest()
             records.append({
                 "chunk_id": chunk_id,
-                "source": file_path.name,
+                "source": display_title,
                 "text": chunk,
                 "embedding": embedding,
-                "metadata": {"source": file_path.name},
+                "metadata": {
+                    "file": file_path.name,
+                    "title": entry.get("title", file_path.name),
+                    "publisher": entry.get("publisher", ""),
+                    "doc_type": entry.get("doc_type", ""),
+                },
             })
 
-        logger.info("Prepared %d chunks from %s", len(chunks), file_path.name)
+        logger.info("Prepared %d chunks from %s", len(chunks), display_title)
 
     if not records:
         logger.info("No documents found in %s", dir_path)

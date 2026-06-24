@@ -392,6 +392,29 @@ async def flush_expired_ephemeral(session: AsyncSession) -> int:
     return count
 
 
+async def delete_ephemeral_by_domain(session: AsyncSession, domains: list[str]) -> int:
+    """
+    Delete ephemeral rows whose URL matches any of the supplied domains.
+    Used to purge blocked/social-media URLs that were cached before the blocklist was applied.
+    Matches exact domain and any subdomain (e.g. 'm.facebook.com' for 'facebook.com').
+    Returns the number of deleted rows.
+    """
+    if not domains:
+        return 0
+    conditions = []
+    for d in domains:
+        conditions.append(EphemeralNewsEmbedding.url.like(f"%://{d}/%"))
+        conditions.append(EphemeralNewsEmbedding.url.like(f"%://*.{d}/%"))
+    from sqlalchemy import or_
+    result = await session.execute(
+        delete(EphemeralNewsEmbedding).where(or_(*conditions))
+    )
+    count = result.rowcount  # type: ignore[assignment]
+    if count:
+        logger.info("Purged %d ephemeral rows matching blocked domains", count)
+    return count
+
+
 # =============================================================================
 # Analysis history
 # =============================================================================

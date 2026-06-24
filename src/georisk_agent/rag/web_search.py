@@ -11,6 +11,8 @@ Requires TAVILY_API_KEY in the environment; silently returns [] when unset.
 import logging
 from typing import Any
 
+from georisk_agent.news.source_filter import is_blocked_url
+
 logger = logging.getLogger(__name__)
 
 _MIN_CONTENT_LENGTH = 80
@@ -41,6 +43,10 @@ def search_web(query: str, api_key: str, max_results: int = 3) -> list[dict[str,
 
     results = []
     for r in response.get("results", []):
+        url = (r.get("url") or "").strip()
+        if is_blocked_url(url):
+            logger.debug("Tavily result blocked: %s", url)
+            continue
         text = (r.get("content") or "").strip()
         if len(text) < _MIN_CONTENT_LENGTH:
             continue
