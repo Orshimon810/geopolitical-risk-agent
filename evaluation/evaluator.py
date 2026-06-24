@@ -1,4 +1,4 @@
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +86,41 @@ def _has_specific_takeaway(takeaway: list) -> bool:
 # Main evaluator
 # ---------------------------------------------------------------------------
 
-def evaluate_response(response: Dict[str, Any]) -> Dict[str, Any]:
+_FALSE_PREMISE_SIGNALS: frozenset = frozenset({
+    "unlikely", "implausible", "no basis", "false premise", "not credible",
+    "no evidence", "no territorial", "antarctic treaty", "no military",
+    "demilitarised", "demilitarized", "peaceful purposes", "low probability",
+    "extremely low", "no conflict", "not realistic",
+})
+
+_SECOND_ORDER_SIGNALS: frozenset = frozenset({
+    "second-order", "second order", "indirect", "spillover", "contagion",
+    "ripple", "downstream", "knock-on", "follow-on", "subsequently", "cascade",
+})
+
+_AMBIGUITY_SIGNALS: frozenset = frozenset({
+    "unclear", "ambiguous", "depends on", "uncertainty", "insufficient",
+    "need more", "clarif", "vague", "broad", "unspecified", "multiple scenarios",
+    "range of outcomes", "cannot determine", "highly uncertain",
+})
+
+
+def _all_text(response: Dict[str, Any]) -> str:
+    parts: List[str] = []
+    for val in response.values():
+        if isinstance(val, str):
+            parts.append(val)
+        elif isinstance(val, list):
+            parts.extend(str(item) for item in val if item)
+        elif isinstance(val, dict):
+            parts.extend(str(v) for v in val.values() if v)
+    return " ".join(parts).lower()
+
+
+def evaluate_response(
+    response: Dict[str, Any],
+    focus: Optional[str] = None,
+) -> Dict[str, Any]:
     """
     Quality-aware evaluator (0–10).
 
@@ -95,6 +129,12 @@ def evaluate_response(response: Dict[str, Any]) -> Dict[str, Any]:
     - Risks: must use market mispricing / asymmetric-expectation language
     - Scenarios: must contain explicit timelines in both cases
     - Takeaway: must include an action verb + a specific asset class
+
+    Optional focus parameter activates query-type-specific bonus checks:
+    - false_premise_detection: +1 bonus if premise rejection language found
+    - second_order_reasoning:  +1 bonus if indirect/spillover effects described
+    - ambiguity_handling:      +1 bonus if uncertainty is explicitly acknowledged
+    - thin_evidence_calibration: +1 bonus if confidence is Low or Medium (not overconfident)
     """
 
     score = 0
@@ -191,6 +231,41 @@ def evaluate_response(response: Dict[str, Any]) -> Dict[str, Any]:
                 notes.append("Confidence may be overly conservative")
     else:
         notes.append("Missing confidence score")
+
+    # -------------------------
+    # Focus-specific bonus checks (does not raise max_score above 10)
+    # -------------------------
+
+    if focus:
+        all_text = _all_text(response)
+
+        if focus == "false_premise_detection":
+            if any(sig in all_text for sig in _FALSE_PREMISE_SIGNALS):
+                notes.append("✓ False premise correctly flagged")
+            else:
+                score = max(0, score - 1)
+                notes.append("✗ False premise not flagged — deducted 1 point")
+
+        elif focus == "second_order_reasoning":
+            if any(sig in all_text for sig in _SECOND_ORDER_SIGNALS):
+                notes.append("✓ Second-order / indirect effects present")
+            else:
+                score = max(0, score - 1)
+                notes.append("✗ No second-order effects language — deducted 1 point")
+
+        elif focus == "ambiguity_handling":
+            if any(sig in all_text for sig in _AMBIGUITY_SIGNALS):
+                notes.append("✓ Uncertainty/ambiguity acknowledged")
+            else:
+                notes.append("Ambiguity not explicitly acknowledged in response")
+
+        elif focus == "thin_evidence_calibration":
+            conf_str = (confidence or "").lower()
+            if conf_str in ("low", "medium"):
+                notes.append(f"✓ Confidence correctly calibrated to {conf_str} on thin-evidence query")
+            elif conf_str == "high":
+                score = max(0, score - 1)
+                notes.append("✗ High confidence on thin-evidence query — deducted 1 point")
 
     # -------------------------
     # Realism Guardrail
