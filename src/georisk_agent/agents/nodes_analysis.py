@@ -42,6 +42,27 @@ class PortfolioAnalysisOutput(BaseModel):
     )
 
 
+class PortfolioNetSynthesis(BaseModel):
+    """H-E: Aggregated net stance across all holdings."""
+    bull_count: int
+    bear_count: int
+    neutral_count: int
+    net_verdict: Literal["Net Bullish", "Net Bearish", "Mixed", "Neutral"] = Field(
+        description=(
+            "Overall portfolio stance derived from verdict counts: "
+            "Net Bullish (>60% Bullish), Net Bearish (>60% Bearish), "
+            "Mixed (significant both ways), or Neutral (all holdings Neutral)."
+        )
+    )
+    net_confidence: Literal["Low", "Medium", "High"]
+    rationale: str = Field(
+        description=(
+            "1-2 sentence summary of the net portfolio stance and the dominant causal driver. "
+            "Name specific sectors or mechanisms — no generic platitudes."
+        )
+    )
+
+
 class AnalysisOutput(BaseModel):
     reasoning: str = Field(
         description=(
@@ -140,6 +161,7 @@ _llm = ChatOpenAI(
 
 structured_llm = _llm.with_structured_output(AnalysisOutput)
 _portfolio_llm = _llm.with_structured_output(PortfolioAnalysisOutput)
+_net_llm       = _llm.with_structured_output(PortfolioNetSynthesis)
 
 
 # -------------------------
@@ -433,6 +455,80 @@ def _correct_tickers(
                 reasoning="Entry was missing from analysis response.",
             ))
     return result
+
+
+# -------------------------
+# Portfolio net synthesis (H-E)
+# -------------------------
+
+def _run_portfolio_net_synthesis(
+    portfolio_impacts: list[dict],
+    query: str,
+    investor_takeaway: list[str],
+) -> dict:
+    """
+    H-E: Compute a net portfolio stance from the finalized per-holding impacts.
+
+    Deterministically counts verdicts and derives net_verdict + net_confidence,
+    then uses a focused LLM call to generate a 1-2 sentence rationale tied to
+    the dominant causal driver. Falls back to a plain-text rationale on LLM error.
+    """
+    bull  = sum(1 for p in portfolio_impacts if p.get("verdict") == "Bullish")
+    bear  = sum(1 for p in portfolio_impacts if p.get("verdict") == "Bearish")
+    neut  = sum(1 for p in portfolio_impacts if p.get("verdict") == "Neutral")
+    total = max(len(portfolio_impacts), 1)
+
+    if bull + bear == 0:
+        net_verdict = "Neutral"
+    elif bull / total > 0.6:
+        net_verdict = "Net Bullish"
+    elif bear / total > 0.6:
+        net_verdict = "Net Bearish"
+    else:
+        net_verdict = "Mixed"
+
+    low_count  = sum(1 for p in portfolio_impacts if p.get("confidence") == "Low")
+    high_count = sum(1 for p in portfolio_impacts if p.get("confidence") == "High")
+    if low_count >= total / 2:
+        net_conf = "Low"
+    elif high_count >= total / 2:
+        net_conf = "High"
+    else:
+        net_conf = "Medium"
+
+    holdings_summary = "\n".join(
+        f"  • {p.get('ticker', '?')} ({p.get('name', '')}): "
+        f"{p.get('verdict', '?')} — {str(p.get('reasoning', ''))[:100]}"
+        for p in portfolio_impacts
+    )
+    takeaway_str = " ".join(investor_takeaway[:2]) if investor_takeaway else "(none)"
+
+    prompt = (
+        f"Context: {query}\n\n"
+        f"Portfolio verdicts ({net_verdict}, {bull}B/{bear}Br/{neut}N):\n"
+        f"{holdings_summary}\n\n"
+        f"Investor takeaway: {takeaway_str}\n\n"
+        "Write a 1-2 sentence net portfolio summary that:\n"
+        f"  1. States the overall stance ({net_verdict}) and the dominant driver.\n"
+        "  2. Names the key risk or opportunity for the portfolio as a whole.\n"
+        "Be concrete — name sectors or mechanisms, not generic platitudes.\n\n"
+        f"Fill: bull_count={bull}, bear_count={bear}, neutral_count={neut}, "
+        f"net_verdict='{net_verdict}', net_confidence='{net_conf}'."
+    )
+
+    try:
+        output: PortfolioNetSynthesis = _net_llm.invoke(prompt)
+        return output.model_dump()
+    except Exception as exc:
+        logger.warning("portfolio_net_synthesis LLM call failed: %s", exc)
+        return {
+            "bull_count":     bull,
+            "bear_count":     bear,
+            "neutral_count":  neut,
+            "net_verdict":    net_verdict,
+            "net_confidence": net_conf,
+            "rationale":      f"{net_verdict}: {bull} bullish, {bear} bearish, {neut} neutral holdings.",
+        }
 
 
 # -------------------------
@@ -854,6 +950,22 @@ Permitted sources (retrieved for this query):
                 len(alignment_log), alignment_log,
             )
 
+    # H-E: Portfolio net synthesis — aggregated stance across all holdings.
+    portfolio_net: Optional[dict] = None
+    if portfolio_impacts:
+        portfolio_net = _run_portfolio_net_synthesis(
+            portfolio_impacts=portfolio_impacts,
+            query=query,
+            investor_takeaway=investor_takeaway,
+        )
+        logger.info(
+            "analysis_node: portfolio_net=%s (B=%d / Br=%d / N=%d)",
+            portfolio_net.get("net_verdict"),
+            portfolio_net.get("bull_count", 0),
+            portfolio_net.get("bear_count", 0),
+            portfolio_net.get("neutral_count", 0),
+        )
+
     # -------------------------
     # Defensive fallbacks for main analysis fields
     # -------------------------
@@ -893,6 +1005,7 @@ Permitted sources (retrieved for this query):
         "sources":           sources,
         "impact_vectors":    impact_vectors,
         "portfolio_impacts": portfolio_impacts,
+        "portfolio_net":     portfolio_net,
         "debug": {
             **(state.get("debug") or {}),
             "analysis_reasoning":         output.reasoning,

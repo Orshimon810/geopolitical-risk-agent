@@ -4,7 +4,8 @@ LangGraph pipeline builder.
 Three factory functions are exported:
 
   build_full_graph()
-    planner → rag_research → signals → analysis → reviewer → final_output
+    planner → [clarification | rag_research] → signals → analysis →
+    consistency_validator → reviewer → final_output
     Used by build_legacy_graph() and direct invocations that run the whole
     pipeline in one shot (scripts, evaluation).
 
@@ -41,6 +42,34 @@ def should_continue(state: DynamicAgentState) -> str:
     return "final_output"
 
 
+def _after_planner(state: DynamicAgentState) -> str:
+    """Conditional edge: short-circuit to clarification when query is unanswerable."""
+    if not state.get("is_answerable", True):
+        return "clarification"
+    return "rag_research"
+
+
+def clarification_node(state: DynamicAgentState) -> DynamicAgentState:
+    """
+    End node for unanswerable or ambiguous queries (C2 ambiguity gate).
+
+    Formats the planner's clarification_message into state["report"] so the
+    API can surface it to the user in the standard response shape.
+    """
+    msg = state.get("clarification_message") or (
+        "Your query could not be processed. Please ask a specific geopolitical "
+        "or investment risk question — for example: "
+        "'How would an Iran-Israel escalation affect oil markets and EM bonds?'"
+    )
+    return {
+        **state,
+        "report": {
+            "status": "clarification_needed",
+            "message": msg,
+        },
+    }
+
+
 def final_output_node(state: DynamicAgentState) -> DynamicAgentState:
     """Strip transient routing fields before the graph exits."""
     return {k: v for k, v in state.items() if k != "reviewer_verdict"}
@@ -73,10 +102,19 @@ def _add_rag_to_end(graph: StateGraph) -> None:
 def build_full_graph():
     """Full pipeline from planner to final output. No checkpointer required."""
     graph = StateGraph(DynamicAgentState)
-    graph.add_node("planner", planner_node)
+    graph.add_node("planner",       planner_node)
+    graph.add_node("clarification", clarification_node)
     _add_rag_to_end(graph)
     graph.set_entry_point("planner")
-    graph.add_edge("planner", "rag_research")
+    graph.add_conditional_edges(
+        "planner",
+        _after_planner,
+        {
+            "clarification": "clarification",
+            "rag_research":  "rag_research",
+        },
+    )
+    graph.add_edge("clarification", END)
     return graph.compile()
 
 

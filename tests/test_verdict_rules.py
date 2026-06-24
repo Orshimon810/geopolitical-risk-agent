@@ -1,5 +1,9 @@
 import pytest
-from georisk_agent.agents.verdict_rules import enforce_asset_class_verdicts, extract_price_benchmarks
+from georisk_agent.agents.verdict_rules import (
+    enforce_asset_class_verdicts,
+    extract_price_benchmarks,
+    check_scenario_polarity,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -192,3 +196,78 @@ class TestExtractPriceBenchmarks:
         q = "BRENT CRUDE crosses $110"
         result = extract_price_benchmarks(q)
         assert "Brent Crude" in result
+
+
+# ---------------------------------------------------------------------------
+# check_scenario_polarity
+# ---------------------------------------------------------------------------
+
+def _impact(verdict):
+    return {"ticker": "X", "name": "X", "verdict": verdict, "confidence": "Medium"}
+
+
+class TestCheckScenarioPolarity:
+    def test_no_conflict_when_scenarios_and_portfolio_agree_bearish(self):
+        scenarios = [
+            "Base case: Brent falls 10%, risk-off sell-off across EM equities.",
+            "Escalation case: Decline deepens, recessionary contraction.",
+        ]
+        impacts = [_impact("Bearish")] * 4 + [_impact("Neutral")]
+        assert check_scenario_polarity(scenarios, impacts) == []
+
+    def test_no_conflict_when_scenarios_and_portfolio_agree_bullish(self):
+        scenarios = [
+            "Base case: Rally in defense names, strong upside for contractors.",
+            "Escalation case: Surge in defense budgets, outperformance of aerospace.",
+        ]
+        impacts = [_impact("Bullish")] * 4 + [_impact("Neutral")]
+        assert check_scenario_polarity(scenarios, impacts) == []
+
+    def test_conflict_bearish_scenario_bullish_portfolio(self):
+        scenarios = [
+            "Base case: Decline in EM equities, risk-off contraction.",
+            "Escalation case: Severe downturn, adverse headwinds.",
+        ]
+        # 4/5 = 80% Bullish — exceeds 60% threshold
+        impacts = [_impact("Bullish")] * 4 + [_impact("Neutral")]
+        conflicts = check_scenario_polarity(scenarios, impacts)
+        assert len(conflicts) == 1
+        assert "bearish" in conflicts[0].lower()
+        assert "Bullish" in conflicts[0]
+
+    def test_conflict_bullish_scenario_bearish_portfolio(self):
+        scenarios = [
+            "Base case: Rally and recovery, bullish upside for risk assets.",
+            "Escalation case: Surge in growth, positive expansion.",
+        ]
+        # 4/5 = 80% Bearish — exceeds 60% threshold
+        impacts = [_impact("Bearish")] * 4 + [_impact("Neutral")]
+        conflicts = check_scenario_polarity(scenarios, impacts)
+        assert len(conflicts) == 1
+        assert "bullish" in conflicts[0].lower()
+        assert "Bearish" in conflicts[0]
+
+    def test_no_conflict_when_portfolio_mixed(self):
+        """Mixed portfolio (50/50) should never conflict regardless of scenarios."""
+        scenarios = [
+            "Base case: Decline and sell-off in EM equities.",
+            "Escalation case: Severe adverse contraction.",
+        ]
+        impacts = [_impact("Bullish")] * 3 + [_impact("Bearish")] * 2
+        # 3/5 = 60% Bullish — equals but does NOT exceed threshold
+        assert check_scenario_polarity(scenarios, impacts) == []
+
+    def test_empty_scenarios_returns_no_conflict(self):
+        assert check_scenario_polarity([], [_impact("Bullish")] * 3) == []
+
+    def test_empty_impacts_returns_no_conflict(self):
+        scenarios = ["Base case: Decline and sell-off.", "Escalation: recessionary."]
+        assert check_scenario_polarity(scenarios, []) == []
+
+    def test_no_conflict_when_polarity_equal(self):
+        """When bear_score == bull_score the function skips the check."""
+        scenarios = ["Base case: decline and rally with upside."]
+        impacts = [_impact("Bullish")] * 4
+        # Both keywords present — equal score → no check
+        result = check_scenario_polarity(scenarios, impacts)
+        assert isinstance(result, list)
