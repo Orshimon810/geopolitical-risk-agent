@@ -107,5 +107,16 @@ class DynamicAgentState(TypedDict, total=False):
     # Directional macro vectors extracted by analysis_node (e.g. "[Bullish] Defense spend surge")
     # Passed to portfolio analysis and consistency validator.
 
+    # ── Planner ambiguity gate (C2) ──────────────────────────────────
+    is_answerable: bool
+    # False when the planner detects the query is too vague or off-topic.
+
+    clarification_message: str
+    # Populated when is_answerable=False; surfaced to the user in lieu of a report.
+
+    # ── Portfolio net synthesis (H-E) ────────────────────────────────
+    portfolio_net: Optional[Dict[str, Any]]
+    # Aggregated net stance: bull/bear/neutral counts + net_verdict + rationale.
+
     # ── Internal routing (stripped by final_output_node) ─────────────
     reviewer_verdict: str           # "PASS" | "RETRY"

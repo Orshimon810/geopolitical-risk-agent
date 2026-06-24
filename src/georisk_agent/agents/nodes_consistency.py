@@ -19,7 +19,11 @@ from pydantic import BaseModel, Field
 
 from georisk_agent.app.config import settings
 from georisk_agent.app.types import DynamicAgentState
-from georisk_agent.agents.verdict_rules import enforce_asset_class_verdicts, detect_takeaway_misalignments
+from georisk_agent.agents.verdict_rules import (
+    enforce_asset_class_verdicts,
+    detect_takeaway_misalignments,
+    check_scenario_polarity,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +74,15 @@ def consistency_validator_node(state: DynamicAgentState) -> DynamicAgentState:
         logger.info(
             "consistency_validator pre-pass: %d deterministic correction(s): %s",
             len(pre_overrides), pre_overrides,
+        )
+
+    # H-F: Scenario polarity check — detect macro scenario vs. portfolio verdict mismatches.
+    scenarios = state.get("scenarios") or []
+    polarity_conflicts = check_scenario_polarity(scenarios, portfolio_impacts)
+    if polarity_conflicts:
+        logger.info(
+            "consistency_validator: %d scenario polarity conflict(s): %s",
+            len(polarity_conflicts), polarity_conflicts,
         )
 
     investor_takeaway = state.get("investor_takeaway") or []
@@ -157,6 +170,7 @@ def consistency_validator_node(state: DynamicAgentState) -> DynamicAgentState:
                     "contradictions_found": False,
                     "summary": output.summary,
                     "pre_pass_overrides": pre_overrides,
+                    "scenario_polarity_conflicts": polarity_conflicts,
                 },
             },
         }
@@ -192,6 +206,7 @@ def consistency_validator_node(state: DynamicAgentState) -> DynamicAgentState:
             "consistency_check": {
                 **output.model_dump(),
                 "pre_pass_overrides": pre_overrides,
+                "scenario_polarity_conflicts": polarity_conflicts,
             },
         },
     }

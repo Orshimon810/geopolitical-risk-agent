@@ -237,6 +237,76 @@ def detect_takeaway_misalignments(
 
 
 # ---------------------------------------------------------------------------
+# Scenario polarity check (H-F)
+# ---------------------------------------------------------------------------
+
+_SCENARIO_BEARISH_KEYWORDS: frozenset[str] = frozenset({
+    "decline", "fall", "downturn", "disruption", "risk-off", "bearish",
+    "contraction", "recessionary", "stress", "deterioration", "sell-off",
+    "selloff", "losses", "headwinds", "weaken", "slump", "slowdown",
+    "negative", "adverse", "pessimistic", "downside", "tightening",
+    "crash", "collapse", "pressure", "correction",
+})
+
+_SCENARIO_BULLISH_KEYWORDS: frozenset[str] = frozenset({
+    "rally", "upside", "bullish", "gain", "recovery", "rebound",
+    "growth", "expansion", "positive", "optimistic", "surge", "boom",
+    "tailwind", "outperform", "strengthen", "rise", "stabilise", "stabilize",
+    "resilience", "rebound", "benefit",
+})
+
+
+def check_scenario_polarity(
+    scenarios: list[str],
+    portfolio_impacts: list[dict],
+) -> list[str]:
+    """
+    H-F: Detect polarity mismatches between macro scenarios and portfolio verdicts.
+
+    A polarity conflict exists when:
+      - Scenarios are predominantly bearish (bear_score > bull_score) BUT
+        more than 60% of portfolio holdings are Bullish, or
+      - Scenarios are predominantly bullish (bull_score > bear_score) BUT
+        more than 60% of portfolio holdings are Bearish.
+
+    Returns a list of conflict description strings (empty = no conflict).
+    """
+    if not scenarios or not portfolio_impacts:
+        return []
+
+    combined = " ".join(scenarios).lower()
+    bear_score = sum(1 for kw in _SCENARIO_BEARISH_KEYWORDS if kw in combined)
+    bull_score = sum(1 for kw in _SCENARIO_BULLISH_KEYWORDS if kw in combined)
+
+    # No clear scenario polarity — skip check
+    if bear_score == bull_score:
+        return []
+
+    total          = max(len(portfolio_impacts), 1)
+    bull_holdings  = sum(1 for p in portfolio_impacts if p.get("verdict") == "Bullish")
+    bear_holdings  = sum(1 for p in portfolio_impacts if p.get("verdict") == "Bearish")
+
+    conflicts: list[str] = []
+
+    if bear_score > bull_score and (bull_holdings / total) > 0.6:
+        conflicts.append(
+            f"Scenario polarity conflict: scenarios are predominantly bearish "
+            f"(bear_score={bear_score} vs bull_score={bull_score}) but "
+            f"{bull_holdings}/{total} portfolio holdings are Bullish — "
+            "review whether verdicts reflect the macro downturn risk."
+        )
+    elif bull_score > bear_score and (bear_holdings / total) > 0.6:
+        conflicts.append(
+            f"Scenario polarity conflict: scenarios are predominantly bullish "
+            f"(bull_score={bull_score} vs bear_score={bear_score}) but "
+            f"{bear_holdings}/{total} portfolio holdings are Bearish — "
+            "review whether verdicts reflect the macro upside case."
+        )
+
+    return conflicts
+
+
+# ---------------------------------------------------------------------------
 # Scenario price-baseline extraction
 # ---------------------------------------------------------------------------
 
