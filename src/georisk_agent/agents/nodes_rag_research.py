@@ -5,6 +5,7 @@ from typing import List, Set, Tuple
 from georisk_agent.app.config import settings
 from georisk_agent.app.types import DynamicAgentState, Evidence, SourceQuality
 from georisk_agent.news.ingestor import ingest_web_results
+from georisk_agent.news.source_filter import is_blocked_url
 from georisk_agent.rag.retriever import retrieve, retrieve_ephemeral
 from georisk_agent.rag.web_search import search_web
 
@@ -79,6 +80,9 @@ def rag_research_node(state: DynamicAgentState) -> DynamicAgentState:
             url         = c.get("url", "") or ""
             title       = c.get("title", sub_question) or sub_question
             source_name = c.get("source", "Live News") or "Live News"
+            if is_blocked_url(url):
+                logger.debug("Blocked live-news chunk skipped: %s", url)
+                continue
             key         = (url or source_name, text)
             if not text or key in seen:
                 continue
@@ -119,6 +123,9 @@ def rag_research_node(state: DynamicAgentState) -> DynamicAgentState:
                     text        = r.get("text", "") or ""
                     url         = r.get("url", "") or ""
                     source_name = r.get("source", "") or url or "Web"
+                    if is_blocked_url(url):
+                        logger.debug("Blocked web chunk skipped: %s", url)
+                        continue
                     key         = (url or source_name, text)
                     if not text or key in seen:
                         continue

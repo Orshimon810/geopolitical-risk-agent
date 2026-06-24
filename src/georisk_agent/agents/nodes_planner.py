@@ -41,6 +41,23 @@ Rules for each sub-question:
   (how quickly do first-order vs second-order effects materialize?)
 - Each question should target one causal link, not the whole picture
 
+MANDATORY — always include these two sub-question types:
+
+1. CHOKEPOINTS: Include at least one sub-question about physical or financial
+   chokepoints — the specific infrastructure, routes, or mechanisms through which
+   the shock transmits. Examples by topic:
+   - Energy/Middle East → Strait of Hormuz transit volume, pipeline capacity, LNG terminal constraints
+   - Semiconductors → ASML EUV lithography monopoly, TSMC foundry concentration, export-control trigger points
+   - Russia sanctions → SWIFT exclusion mechanics, capital controls, frozen reserve repatriation
+   - Balkans/Turkey energy → TurkStream pipeline capacity, Bosphorus access, Southern Corridor alternatives
+   - Trade wars → port congestion, tariff pass-through, inventory buffer drawdown
+
+2. SECOND-ORDER EFFECTS: Include at least one sub-question explicitly asking
+   about second-order or indirect consequences — effects that emerge after the
+   immediate shock, through feedback loops, policy responses, or behavioural shifts.
+   Frame it as: "What are the second-order effects of [X] on [Y], and over what
+   timeline do they materialise relative to first-order impacts?"
+
 Bad example:  "What will happen to oil prices?"
 Good example: "Through what mechanism would a supply disruption in [region]
                translate into Brent crude repricing, and which importers face

@@ -18,42 +18,12 @@ import hashlib
 import logging
 from datetime import datetime, timezone
 from typing import Any
-from urllib.parse import urlparse
 
 import requests
 
+from georisk_agent.news.source_filter import is_blocked_url
+
 logger = logging.getLogger(__name__)
-
-# Domains known to publish unreliable, state-sponsored, or off-topic content.
-# Checked against the article URL before embedding — blocks both providers.
-# Add domains in lowercase without the www. prefix.
-_BLOCKED_DOMAINS: frozenset[str] = frozenset({
-    "naturalnews.com",       # health misinformation / conspiracy
-    "infowars.com",          # far-right conspiracy
-    "rt.com",                # Russian state media
-    "sputniknews.com",       # Russian state media
-    "tass.com",              # Russian state media
-    "globalresearch.ca",     # documented misinformation aggregator
-    "zerohedge.com",         # sensationalist / often inaccurate financial content
-    "beforeitsnews.com",     # user-generated conspiracy content
-    "veteranstoday.com",     # known disinformation outlet
-    "thegatewaypundit.com",  # partisan misinformation
-    "breitbart.com",         # highly partisan; poor geopolitical accuracy
-    "beincrypto.com",        # crypto-only outlet; not relevant for geopolitical analysis
-    "cryptobriefing.com",    # crypto-only outlet; not relevant for geopolitical analysis
-    "coindesk.com",          # crypto-only outlet
-    "cointelegraph.com",     # crypto-only outlet
-    "decrypt.co",            # crypto-only outlet
-})
-
-
-def _article_domain(url: str) -> str:
-    """Extract the bare domain (no www.) from a URL for blocklist matching."""
-    try:
-        host = urlparse(url).netloc.lower()
-        return host.removeprefix("www.")
-    except Exception:
-        return ""
 
 
 # Fixed geopolitical/financial query terms for NewsAPI.
@@ -81,7 +51,7 @@ def _normalise_article(title: str, description: str, url: str, published_at: str
         return None
     if len(title) + len(description) < _MIN_TEXT_LENGTH:
         return None
-    if _article_domain(url) in _BLOCKED_DOMAINS:
+    if is_blocked_url(url):
         logger.debug("Blocked outlet skipped: %s", url)
         return None
 
