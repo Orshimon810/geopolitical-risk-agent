@@ -63,5 +63,25 @@
     "title": "US-China Trade Relationship Data",
     "publisher": "Internal Dataset",
     "doc_type": "data_file"
+  },
+  "straits_chokepoints_oil_routes.txt": {
+    "title": "Global Oil Chokepoints and Maritime Transit Routes",
+    "publisher": "Internal Research Briefing",
+    "doc_type": "domain_knowledge"
+  },
+  "semiconductor_export_controls_ASML.txt": {
+    "title": "Semiconductor Supply Chain, Export Controls, and ASML Monopoly",
+    "publisher": "Internal Research Briefing",
+    "doc_type": "domain_knowledge"
+  },
+  "europe_gas_pipelines_turkstream.txt": {
+    "title": "European Gas Pipelines, TurkStream, and Energy Infrastructure",
+    "publisher": "Internal Research Briefing",
+    "doc_type": "domain_knowledge"
+  },
+  "russia_sanctions_capital_controls.txt": {
+    "title": "Russia Sanctions, Capital Controls, and Asset Seizures",
+    "publisher": "Internal Research Briefing",
+    "doc_type": "domain_knowledge"
   }
 }
