@@ -434,6 +434,26 @@ def _run_portfolio_analysis(
         "a directional verdict from Theme B, not Neutral.\n"
         "- Example: a defense ETF has no exposure to payment processing (Theme A) but clear "
         "exposure to accelerated NATO budgets (Theme B) → Bullish, not Neutral.\n\n"
+        "=== EXPOSURE-CHANNEL CLASSIFICATION (MANDATORY — classify before verdict) ===\n"
+        "For EACH holding, identify its transmission channel FIRST, then assign the verdict.\n"
+        "Tag the channel at the start of the reasoning field:\n"
+        "  • [direct-operational]   — the holding has assets, employees, or production in the\n"
+        "                             affected geography (e.g. an oil producer in the conflict zone).\n"
+        "  • [supply-chain-input]   — the holding buys a critical input from the affected region\n"
+        "                             (e.g. a chip maker sourcing rare earths from a sanctioned country).\n"
+        "  • [commodity-price]      — the holding's revenue or costs move directly with a commodity\n"
+        "                             that the event affects (e.g. an airline exposed to jet fuel).\n"
+        "  • [macro-risk-sentiment] — the holding has NO direct operational or supply-chain link\n"
+        "                             to the affected geography; it is affected only through broad\n"
+        "                             risk-off moves, currency shifts, or second-order policy responses.\n"
+        "  • [none]                 — no meaningful exposure; Neutral verdict required.\n\n"
+        "CRITICAL RULE — geographic proximity ≠ operational exposure:\n"
+        "Do NOT assert [direct-operational] or [supply-chain-input] unless the holding has\n"
+        "documented assets, suppliers, or revenue in the affected geography.\n"
+        "Counter-example: TSMC is headquartered in Taiwan, NOT the Middle East. An Iran-Israel\n"
+        "escalation does NOT cause TSMC production delays. The correct channel is\n"
+        "[macro-risk-sentiment] — oil shock → risk-off → elevated Taiwan Strait risk via\n"
+        "China opportunism, NOT a direct supply disruption.\n\n"
         "=== ZERO-IMPACT / HONEST NEUTRAL RULE ===\n"
         "Mark Neutral ONLY when the ticker has NO meaningful exposure to ANY vector across ALL "
         "themes AND no competing vectors to weigh. Neutral reasoning must name each theme it "
@@ -571,6 +591,26 @@ def analysis_node(state: DynamicAgentState) -> DynamicAgentState:
         )
         logger.info("analysis_node: price benchmarks extracted: %s", benchmarks)
 
+    # When no explicit query benchmark exists, anchor scenarios to live prices
+    # so the LLM cannot fall back to memorized round numbers (e.g. $80-85/bbl).
+    live_anchor_block = ""
+    if not benchmarks and market_data:
+        anchor_lines = []
+        for _, d in market_data.items():
+            if d.get("status") == "ok" and d.get("price") is not None:
+                anchor_lines.append(
+                    f"  - {d['label']}: ${d['price']} "
+                    f"({d.get('change_1d_pct', 0.0):+.1f}% today)"
+                )
+        if anchor_lines:
+            live_anchor_block = (
+                "\nLIVE PRICE SCENARIO ANCHORS (MANDATORY — no explicit query benchmark present):\n"
+                "Project scenario price targets FROM these live levels. "
+                "Do NOT use memorised round numbers that ignore the current market price.\n"
+                + "\n".join(anchor_lines)
+                + "\nExample: if Brent is $75.79, a +20% shock → ~$91, not '$90-$100'.\n"
+            )
+
     # Build portfolio block for the main prompt (fallback path)
     portfolio_block = ""
     if portfolio:
@@ -600,6 +640,7 @@ Evidence:
 
 {signals_block}
 {benchmark_block}
+{live_anchor_block}
 {portfolio_block}
 
 Structural rules:

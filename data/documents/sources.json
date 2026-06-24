@@ -1,0 +1,67 @@
+{
+  "ar2023e.pdf": {
+    "title": "BIS Annual Economic Report 2023",
+    "publisher": "Bank for International Settlements",
+    "doc_type": "annual_report"
+  },
+  "sdnea2023001.pdf": {
+    "title": "IMF Staff Discussion Note: Geoeconomic Fragmentation and Foreign Direct Investment",
+    "publisher": "International Monetary Fund",
+    "doc_type": "staff_discussion_note"
+  },
+  "BIS_WP1224_Economic_Coercion_Fragmentation.pdf": {
+    "title": "BIS Working Paper 1224: Economic Coercion and Geoeconomic Fragmentation",
+    "publisher": "Bank for International Settlements",
+    "doc_type": "working_paper"
+  },
+  "BIS_WP1249_Geopolitics_International_Trade.pdf": {
+    "title": "BIS Working Paper 1249: Geopolitics and International Trade",
+    "publisher": "Bank for International Settlements",
+    "doc_type": "working_paper"
+  },
+  "BIS_WP1338_Global_Banking_Geopolitics.pdf": {
+    "title": "BIS Working Paper 1338: Global Banking and Geopolitics",
+    "publisher": "Bank for International Settlements",
+    "doc_type": "working_paper"
+  },
+  "Brookings_Russia_Strategic_Sanctions.pdf": {
+    "title": "Brookings: Russia Strategic Sanctions — Economic and Geopolitical Impact",
+    "publisher": "Brookings Institution",
+    "doc_type": "research_report"
+  },
+  "Global Economic Prospects, January 2026.pdf": {
+    "title": "World Bank Global Economic Prospects, January 2026",
+    "publisher": "World Bank",
+    "doc_type": "flagship_report"
+  },
+  "RAND_Taiwan_Coercive_Quarantine.pdf": {
+    "title": "RAND: Implications of a Coercive Quarantine of Taiwan",
+    "publisher": "RAND Corporation",
+    "doc_type": "research_report"
+  },
+  "RAND_Taiwan_Semiconductor_Supply_Chain.pdf": {
+    "title": "RAND: Taiwan Semiconductor Supply Chain Risk Assessment",
+    "publisher": "RAND Corporation",
+    "doc_type": "research_report"
+  },
+  "WorldBank_Commodity_Markets_Outlook_Oct2025.pdf": {
+    "title": "World Bank Commodity Markets Outlook, October 2025",
+    "publisher": "World Bank",
+    "doc_type": "flagship_report"
+  },
+  "WorldBank_Geopolitical_Oil_Supply_Shocks.pdf": {
+    "title": "World Bank: Implications of Geopolitical Oil Supply Shocks",
+    "publisher": "World Bank",
+    "doc_type": "research_report"
+  },
+  "WorldBank_Global_Economic_Prospects_Jan2025.pdf": {
+    "title": "World Bank Global Economic Prospects, January 2025",
+    "publisher": "World Bank",
+    "doc_type": "flagship_report"
+  },
+  "us_china_trade.txt": {
+    "title": "US-China Trade Relationship Data",
+    "publisher": "Internal Dataset",
+    "doc_type": "data_file"
+  }
+}
