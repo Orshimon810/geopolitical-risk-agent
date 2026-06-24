@@ -39,7 +39,7 @@ def rag_research_node(state: DynamicAgentState) -> DynamicAgentState:
     hist_count = 0
 
     def _fetch_historical(sq: str):
-        return "hist", sq, retrieve(sq, k=5)
+        return "hist", sq, retrieve(sq, k=5, min_similarity=0.45)
 
     def _fetch_live(sq: str):
         return "live", sq, retrieve_ephemeral(sq, k=2)
@@ -58,9 +58,22 @@ def rag_research_node(state: DynamicAgentState) -> DynamicAgentState:
             else:
                 raw_live[sub_question] = chunks
 
-    # Historical chunks first — they anchor the evidence list
+    # Historical chunks first — they anchor the evidence list.
+    # Adaptive post-retrieval trim: for each sub-question, drop chunks whose
+    # similarity is more than 0.12 below the top chunk for that sub-question.
+    # This prevents a strong hit from being padded with weak tangential matches
+    # while guaranteeing the best chunk always survives.
+    _ADAPTIVE_DROP_MARGIN = 0.12
     for sub_question in plan:
-        for c in raw_historical.get(sub_question, []):
+        sq_chunks = raw_historical.get(sub_question, [])
+        if sq_chunks:
+            top_sim = max(c.get("similarity", 0.0) for c in sq_chunks)
+            adaptive_floor = max(0.45, top_sim - _ADAPTIVE_DROP_MARGIN)
+            sq_chunks = [
+                c for c in sq_chunks
+                if c.get("similarity", 0.0) >= adaptive_floor
+            ] or sq_chunks[:1]  # always keep the best chunk
+        for c in sq_chunks:
             text       = c.get("text", "") or ""
             source     = c.get("source", "local_corpus") or "local_corpus"
             similarity = c.get("similarity", 0.0)
@@ -93,31 +106,64 @@ def rag_research_node(state: DynamicAgentState) -> DynamicAgentState:
             live_count += 1
 
     # Web fallback — Tavily search for sub-questions that are not well covered.
-    # "Not well covered" means: no live chunk AND no historical chunk with
-    # similarity >= 0.50. This catches the common case where the corpus returns
-    # generic/tangential matches (e.g. World Bank global reports for a niche
-    # country query) — those score ~0.45-0.50 and are not truly on-topic.
+    #
+    # "Well covered" (H-D) = ≥2 historical chunks at ≥0.55 similarity
+    #                        OR ≥1 live chunk for that sub-question.
+    # A single corpus hit at 0.55 is no longer sufficient — generic macro
+    # reports can score 0.55 for almost any trade/finance query without
+    # providing query-specific evidence.
+    #
+    # Minimum web floor: if fewer than half the sub-questions are well covered
+    # OR total non-web chunks < 6, force Tavily for the weakest sub-questions
+    # even if the coverage predicate would pass them.
+    #
+    # max_results is adaptive: 5 when corpus is thin, 3 otherwise.
+    #
     # Only fires when TAVILY_API_KEY is set; skipped silently otherwise.
     # Results are persisted to ephemeral_embeddings so future queries on the
     # same topic hit the cache instead of calling Tavily again.
-    # 0.55 separates specific corpus coverage (RAND/BIS score 0.57+) from
-    # generic tangential matches (World Bank global reports score 0.45-0.54).
     _WELL_ANSWERED_MIN_SIM = 0.55
+    _WELL_ANSWERED_MIN_CHUNKS = 2
+    _MIN_TOTAL_CHUNKS = 6
+
+    def _is_well_covered(sq: str) -> bool:
+        has_live = bool(raw_live.get(sq))
+        hist_above_floor = sum(
+            1 for c in raw_historical.get(sq, [])
+            if c.get("similarity", 0.0) >= _WELL_ANSWERED_MIN_SIM
+        )
+        return has_live or hist_above_floor >= _WELL_ANSWERED_MIN_CHUNKS
 
     web_count = 0
     web_answered: Set[str] = set()
     if settings.tavily_api_key:
-        unanswered_sqs = [
-            sq for sq in plan
-            if not raw_live.get(sq) and not any(
-                c.get("similarity", 0.0) >= _WELL_ANSWERED_MIN_SIM
-                for c in raw_historical.get(sq, [])
+        well_covered = {sq for sq in plan if _is_well_covered(sq)}
+        unanswered_sqs = [sq for sq in plan if sq not in well_covered]
+
+        # Minimum web floor — ensure thin-corpus queries always get web research.
+        non_web_chunks = hist_count + live_count
+        corpus_thin = non_web_chunks < _MIN_TOTAL_CHUNKS or len(well_covered) < len(plan) / 2
+        if corpus_thin and not unanswered_sqs:
+            # Force the weakest covered sub-questions into the web search list
+            by_coverage = sorted(
+                well_covered,
+                key=lambda sq: sum(
+                    c.get("similarity", 0.0) for c in raw_historical.get(sq, [])
+                ) / max(len(raw_historical.get(sq, [])), 1),
             )
-        ]
+            unanswered_sqs = by_coverage[: max(1, len(plan) // 2)]
+            logger.info(
+                "RAG web fallback | thin corpus (chunks=%d, covered=%d/%d) — "
+                "forcing web search for %d sub-question(s)",
+                non_web_chunks, len(well_covered), len(plan), len(unanswered_sqs),
+            )
+
+        max_results = 5 if corpus_thin else 3
+
         if unanswered_sqs:
             raw_web_results: list[dict] = []
             for sq in unanswered_sqs:
-                sq_results = search_web(sq, settings.tavily_api_key, max_results=3)
+                sq_results = search_web(sq, settings.tavily_api_key, max_results=max_results)
                 raw_web_results.extend(sq_results)
                 for r in sq_results:
                     text        = r.get("text", "") or ""
@@ -140,8 +186,9 @@ def rag_research_node(state: DynamicAgentState) -> DynamicAgentState:
                     web_answered.add(sq)
             if web_count:
                 logger.info(
-                    "RAG web fallback | %d web chunks added for %d unanswered sub-questions",
-                    web_count, len(unanswered_sqs),
+                    "RAG web fallback | %d web chunks added for %d sub-questions "
+                    "(well_covered=%d, corpus_thin=%s, max_results=%d)",
+                    web_count, len(unanswered_sqs), len(well_covered), corpus_thin, max_results,
                 )
                 ingest_web_results(raw_web_results)
 
