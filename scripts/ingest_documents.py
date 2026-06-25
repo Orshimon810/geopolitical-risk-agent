@@ -80,7 +80,7 @@ def _embed_batch(texts: List[str]) -> List[List[float]]:
 async def ingest_directory(dir_path: str) -> None:
     base_path = Path(dir_path)
     manifest = _load_source_manifest(base_path)
-    records = []
+    grand_total = 0
 
     for file_path in sorted(base_path.iterdir()):
         if file_path.suffix.lower() == ".txt":
@@ -109,6 +109,7 @@ async def ingest_directory(dir_path: str) -> None:
             embeddings.extend(_embed_batch(chunks[i : i + EMBED_BATCH]))
 
         entry = manifest.get(file_path.name, {})
+        records = []
         for chunk, embedding in zip(chunks, embeddings):
             chunk_id = hashlib.sha256(chunk.encode()).hexdigest()
             records.append({
@@ -124,17 +125,19 @@ async def ingest_directory(dir_path: str) -> None:
                 },
             })
 
-        logger.info("Prepared %d chunks from %s", len(chunks), display_title)
+        # Commit per-document to avoid long-lived connections timing out on Neon.
+        async with get_session() as session:
+            count = await bulk_upsert_embeddings(session, records)
+            await session.commit()
 
-    if not records:
+        grand_total += count
+        logger.info("Ingested %d chunks from %s", count, display_title)
+
+    if grand_total == 0:
         logger.info("No documents found in %s", dir_path)
         return
 
-    async with get_session() as session:
-        total = await bulk_upsert_embeddings(session, records)
-        await session.commit()
-
-    logger.info("Ingested %d chunks total into pgvector.", total)
+    logger.info("Ingested %d chunks total into pgvector.", grand_total)
 
 
 if __name__ == "__main__":
