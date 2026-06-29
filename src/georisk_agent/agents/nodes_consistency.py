@@ -91,10 +91,16 @@ def consistency_validator_node(state: DynamicAgentState) -> DynamicAgentState:
     if not investor_takeaway and not market_impacts:
         return {**state, "portfolio_impacts": portfolio_impacts}
 
+    def _verdict(p: dict) -> str:
+        return p.get("market_sentiment") or p.get("verdict", "?")
+
+    def _reasoning(p: dict) -> str:
+        return p.get("causal_reasoning") or p.get("reasoning", "")
+
     holdings_block = "\n".join(
         f"  • {p.get('ticker', '?')} ({p.get('name', '')}): "
-        f"verdict={p.get('verdict', '?')} | "
-        f"reasoning={str(p.get('reasoning', ''))[:120]}"
+        f"verdict={_verdict(p)} | "
+        f"reasoning={_reasoning(p)[:120]}"
         for p in portfolio_impacts
     )
     takeaway_block = "\n".join(f"  - {t}" for t in investor_takeaway)
@@ -183,9 +189,12 @@ def consistency_validator_node(state: DynamicAgentState) -> DynamicAgentState:
         if ticker_upper in correction_map:
             fix = correction_map[ticker_upper]
             corrected_p = dict(p)
-            original_verdict = p.get("verdict", "?")
-            corrected_p["verdict"] = fix.corrected_verdict
-            corrected_p["reasoning"] = fix.corrected_reasoning
+            original_verdict = _verdict(p)
+            # Write both canonical and legacy keys for downstream compatibility
+            corrected_p["market_sentiment"] = fix.corrected_verdict
+            corrected_p["verdict"]          = fix.corrected_verdict
+            corrected_p["causal_reasoning"] = fix.corrected_reasoning
+            corrected_p["reasoning"]        = fix.corrected_reasoning
             corrected_impacts.append(corrected_p)
             fixed_count += 1
             logger.info(
