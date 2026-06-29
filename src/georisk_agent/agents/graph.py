@@ -21,14 +21,47 @@ Three factory functions are exported:
 """
 
 from langgraph.graph import StateGraph, END
+from langgraph.types import Send
 
 from georisk_agent.app.types import DynamicAgentState
 from georisk_agent.agents.nodes_planner import planner_node
 from georisk_agent.agents.nodes_rag_research import rag_research_node
 from georisk_agent.agents.nodes_signals import signals_node
 from georisk_agent.agents.nodes_analysis import analysis_node
+from georisk_agent.agents.nodes_macro_context import macro_context_node
+from georisk_agent.agents.nodes_ticker_analyst import ticker_analyst_node
+from georisk_agent.agents.nodes_reduce import reduce_ticker_results_node
 from georisk_agent.agents.nodes_consistency import consistency_validator_node
 from georisk_agent.agents.nodes_reviewer import reviewer_node, MAX_RETRIES_DEFAULT
+
+
+def spawn_ticker_workers(state: DynamicAgentState):
+    """
+    Conditional edge from macro_context_node.
+
+    Returns a list of Send() objects (one per ticker) to fan-out to
+    ticker_analyst_node in parallel, or the string "consistency_validator"
+    when no portfolio is present to bypass the fan-out entirely.
+    """
+    portfolio = state.get("enriched_portfolio")
+    if not portfolio:
+        return "consistency_validator"
+
+    macro     = state.get("macro_context") or {}
+    prices    = (state.get("signals") or {}).get("portfolio_prices", {})
+    takeaway  = state.get("investor_takeaway") or []
+    query     = state.get("query", "")
+
+    return [
+        Send("ticker_analyst", {
+            "query":            query,
+            "macro_context":    macro,
+            "enriched_holding": h,
+            "portfolio_price":  prices.get((h.get("ticker") or ""), {}),
+            "investor_takeaway": takeaway,
+        })
+        for h in portfolio
+    ]
 
 
 def should_continue(state: DynamicAgentState) -> str:
@@ -77,17 +110,33 @@ def final_output_node(state: DynamicAgentState) -> DynamicAgentState:
 
 def _add_rag_to_end(graph: StateGraph) -> None:
     """Wire the shared rag_research → … → END edges onto a StateGraph."""
-    graph.add_node("rag_research",         rag_research_node)
-    graph.add_node("signals",              signals_node)
-    graph.add_node("analysis",             analysis_node)
+    graph.add_node("rag_research",          rag_research_node)
+    graph.add_node("signals",               signals_node)
+    graph.add_node("analysis",              analysis_node)
+    # Map-reduce portfolio sub-pipeline
+    graph.add_node("macro_context",         macro_context_node)
+    graph.add_node("ticker_analyst",        ticker_analyst_node)
+    graph.add_node("reduce_ticker_results", reduce_ticker_results_node)
     graph.add_node("consistency_validator", consistency_validator_node)
-    graph.add_node("reviewer",             reviewer_node)
-    graph.add_node("final_output",         final_output_node)
+    graph.add_node("reviewer",              reviewer_node)
+    graph.add_node("final_output",          final_output_node)
 
-    graph.add_edge("rag_research",          "signals")
-    graph.add_edge("signals",               "analysis")
-    graph.add_edge("analysis",              "consistency_validator")
+    graph.add_edge("rag_research",  "signals")
+    graph.add_edge("signals",       "analysis")
+    graph.add_edge("analysis",      "macro_context")
+
+    # Fan-out: spawn one ticker_analyst worker per holding, or skip to
+    # consistency_validator when no portfolio is present.
+    graph.add_conditional_edges(
+        "macro_context",
+        spawn_ticker_workers,
+        ["ticker_analyst", "consistency_validator"],
+    )
+
+    graph.add_edge("ticker_analyst",        "reduce_ticker_results")
+    graph.add_edge("reduce_ticker_results", "consistency_validator")
     graph.add_edge("consistency_validator", "reviewer")
+
     graph.add_conditional_edges(
         "reviewer",
         should_continue,

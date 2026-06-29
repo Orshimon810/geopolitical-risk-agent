@@ -1,4 +1,5 @@
-from typing import TypedDict, List, Dict, Any, Optional
+import operator
+from typing import Annotated, TypedDict, List, Dict, Any, Optional
 
 
 class Evidence(TypedDict):
@@ -17,6 +18,20 @@ class PortfolioHolding(TypedDict, total=False):
     asset_type: str       # stock | etf | crypto | commodity | bond
     quantity: Optional[float]
     cost_basis_usd: Optional[float]
+    # Optional enrichment fields — populated by macro_context_node or caller
+    geographic_asset_footprint: List[str]
+    economic_role: str            # Producer | Consumer | Mixed | Unrelated
+    primary_commodity: Optional[str]
+    headquarters_country: str
+
+
+class TickerWorkerInput(TypedDict, total=False):
+    """Minimal per-ticker slice carried by each Send() in the fan-out."""
+    query: str
+    macro_context: Dict[str, Any]      # serialised MacroEventContext
+    enriched_holding: Dict[str, Any]   # serialised EnrichedHolding
+    portfolio_price: Dict[str, Any]    # signals['portfolio_prices'][ticker]
+    investor_takeaway: List[str]
 
 
 class SourceQuality(TypedDict):
@@ -101,11 +116,23 @@ class DynamicAgentState(TypedDict, total=False):
     # None = not opted in; list = holdings to analyse per-ticker
 
     portfolio_impacts: Optional[List[Dict[str, Any]]]
-    # Serialised PortfolioHoldingImpact dicts; populated by analysis_node
+    # Serialised TickerHoldingAnalysis dicts (with legacy key aliases); populated by reduce_ticker_results_node
 
     impact_vectors: Optional[List[str]]
     # Directional macro vectors extracted by analysis_node (e.g. "[Bullish] Defense spend surge")
-    # Passed to portfolio analysis and consistency validator.
+    # Passed to macro_context_node and ticker workers.
+
+    # ── Map-reduce fan-out fields ────────────────────────────────────
+    macro_context: Optional[Dict[str, Any]]
+    # Serialised MacroEventContext; produced by macro_context_node, broadcast via Send()
+
+    enriched_portfolio: Optional[List[Dict[str, Any]]]
+    # Serialised EnrichedHolding list; produced by macro_context_node for spawning workers
+
+    ticker_analyses: Annotated[List[Dict[str, Any]], operator.add]
+    # Per-ticker TickerHoldingAnalysis results accumulated across parallel workers.
+    # Uses operator.add reducer so concurrent worker writes are safely concatenated.
+    # reset to [] by reduce_ticker_results_node after each pass (prevents retry stacking).
 
     # ── Planner ambiguity gate (C2) ──────────────────────────────────
     is_answerable: bool
