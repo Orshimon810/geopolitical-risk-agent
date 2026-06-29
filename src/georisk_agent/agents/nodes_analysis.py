@@ -1,15 +1,13 @@
 import logging
-from typing import List, Dict, Any, Literal, Optional
+from typing import List, Dict, Any, Literal
 
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
 from georisk_agent.app.config import settings
-from georisk_agent.app.types import DynamicAgentState, PortfolioHolding
+from georisk_agent.app.types import DynamicAgentState
 from georisk_agent.agents.verdict_rules import (
-    enforce_asset_class_verdicts,
     extract_price_benchmarks,
-    detect_takeaway_misalignments,
 )
 
 logger = logging.getLogger(__name__)
@@ -18,29 +16,6 @@ logger = logging.getLogger(__name__)
 # -------------------------
 # Structured output schemas
 # -------------------------
-
-class PortfolioHoldingImpact(BaseModel):
-    ticker: str
-    name: str
-    verdict: Literal["Bullish", "Bearish", "Neutral"]
-    short_term_impact: str = Field(
-        description="1-2 sentence impact over days/weeks."
-    )
-    long_term_impact: str = Field(
-        description="1-2 sentence impact over months/quarters."
-    )
-    confidence: Literal["Low", "Medium", "High"]
-    reasoning: str = Field(
-        description="Brief causal chain connecting the geopolitical event to this specific holding."
-    )
-
-
-class PortfolioAnalysisOutput(BaseModel):
-    """Dedicated schema for the focused portfolio-only LLM call."""
-    impacts: list[PortfolioHoldingImpact] = Field(
-        description="One impact entry per holding listed in the prompt, in the same order. Never return an empty list if holdings were provided."
-    )
-
 
 class PortfolioNetSynthesis(BaseModel):
     """H-E: Aggregated net stance across all holdings."""
@@ -136,17 +111,6 @@ class AnalysisOutput(BaseModel):
             "Never use generic placeholders like 'Market analysis reports' or 'Bloomberg; Datastream'."
         )
     )
-    # Fallback portfolio assessment embedded in the main call.
-    # The dedicated _portfolio_llm call is the primary source; this is the safety net.
-    portfolio_impacts: Optional[list[PortfolioHoldingImpact]] = Field(
-        default=None,
-        description=(
-            "Per-holding impact assessment. "
-            "If a 'Portfolio positions to assess' block appears in the prompt, "
-            "you MUST populate this list with one entry per listed holding — never leave it null. "
-            "Leave null only when no such block is present."
-        )
-    )
 
 
 # -------------------------
@@ -160,7 +124,6 @@ _llm = ChatOpenAI(
 )
 
 structured_llm = _llm.with_structured_output(AnalysisOutput)
-_portfolio_llm = _llm.with_structured_output(PortfolioAnalysisOutput)
 _net_llm       = _llm.with_structured_output(PortfolioNetSynthesis)
 
 
@@ -369,94 +332,6 @@ def _format_evidence(
     return "\n".join(lines)
 
 
-def _format_portfolio_block(
-    holdings: list[PortfolioHolding],
-    portfolio_prices: dict[str, Any],
-) -> str:
-    """Produce the portfolio block for the main analysis prompt."""
-    lines = ["Portfolio positions to assess:"]
-    for h in holdings:
-        ticker = h.get("ticker", "")
-        name = h.get("name", "")
-        asset_type = h.get("asset_type", "")
-        qty = h.get("quantity")
-        val = h.get("cost_basis_usd")
-
-        price_info = portfolio_prices.get(ticker, {})
-        if price_info.get("status") == "ok":
-            price_str = f"${price_info['price']:.2f} ({price_info['change_1d_pct']:+.1f}% today)"
-        else:
-            price_str = "price unavailable"
-
-        meta_parts = []
-        if qty is not None:
-            meta_parts.append(f"qty: {qty}")
-        if val is not None:
-            meta_parts.append(f"value: ${val:,.2f}")
-        meta_str = f" — {', '.join(meta_parts)}" if meta_parts else ""
-
-        lines.append(f"  • {ticker} ({name}, {asset_type}){meta_str} | {price_str}")
-
-    lines.append(
-        "\nFor EACH holding above, provide a PortfolioHoldingImpact entry covering:\n"
-        "  - verdict: Bullish / Bearish / Neutral\n"
-        "  - short_term_impact: effect over days/weeks\n"
-        "  - long_term_impact: effect over months/quarters\n"
-        "  - confidence: Low / Medium / High\n"
-        "  - reasoning: specific causal chain linking this geopolitical event to this asset"
-    )
-    return "\n".join(lines)
-
-
-def _price_str(ticker: str, portfolio_prices: dict[str, Any]) -> str:
-    info = portfolio_prices.get(ticker, {})
-    if info.get("status") == "ok":
-        return f"price ${info['price']:.2f} ({info['change_1d_pct']:+.1f}% today)"
-    return "price unavailable"
-
-
-def _correct_tickers(
-    raw_impacts: list[PortfolioHoldingImpact],
-    portfolio: list[PortfolioHolding],
-) -> list[PortfolioHoldingImpact]:
-    """
-    Enforce correct ticker/name from the input portfolio by position.
-    Fills placeholder entries for any holdings the LLM omitted.
-    """
-    result: list[PortfolioHoldingImpact] = []
-    for i, h in enumerate(portfolio):
-        correct_ticker = h.get("ticker", "")
-        correct_name = h.get("name", correct_ticker)
-
-        if i < len(raw_impacts):
-            raw = raw_impacts[i]
-            if raw.ticker.upper() != correct_ticker.upper():
-                logger.warning(
-                    "portfolio ticker mismatch at position %d — expected %s, got %s; correcting",
-                    i, correct_ticker, raw.ticker,
-                )
-            result.append(PortfolioHoldingImpact(
-                ticker=correct_ticker,
-                name=correct_name,
-                verdict=raw.verdict,
-                short_term_impact=raw.short_term_impact,
-                long_term_impact=raw.long_term_impact,
-                confidence=raw.confidence,
-                reasoning=raw.reasoning,
-            ))
-        else:
-            result.append(PortfolioHoldingImpact(
-                ticker=correct_ticker,
-                name=correct_name,
-                verdict="Neutral",
-                short_term_impact="Unable to assess short-term impact for this holding.",
-                long_term_impact="Unable to assess long-term impact for this holding.",
-                confidence="Low",
-                reasoning="Entry was missing from analysis response.",
-            ))
-    return result
-
-
 # -------------------------
 # Portfolio net synthesis (H-E)
 # -------------------------
@@ -532,160 +407,17 @@ def _run_portfolio_net_synthesis(
 
 
 # -------------------------
-# Dedicated portfolio call
-# -------------------------
-
-def _run_portfolio_analysis(
-    portfolio: list[PortfolioHolding],
-    portfolio_prices: dict[str, Any],
-    query: str,
-    market_impacts: list[str],
-    signals_block: str,
-    impact_vectors: list[str],
-    investor_takeaway: list[str],
-) -> list[PortfolioHoldingImpact]:
-    """
-    PHASE 2: Focused LLM call that maps macro impact vectors onto individual holdings.
-
-    Uses the impact_vectors extracted from Phase 1 (macro analysis) as the bridge.
-    Enforces the Zero-Impact/Honest Neutral rule and the Vector-Mapping rule.
-    Returns corrected entries (ticker/name guaranteed to match input portfolio).
-    """
-    holdings_lines = "\n".join(
-        f'{i + 1}. ticker="{h.get("ticker", "")}" | name="{h.get("name", "")}" '
-        f'| type={h.get("asset_type", "stock")} | {_price_str(h.get("ticker", ""), portfolio_prices)}'
-        for i, h in enumerate(portfolio)
-    )
-    impacts_lines = "\n".join(f"- {m}" for m in market_impacts[:4])
-    signals_section = ("Market signals:\n" + signals_block) if signals_block else ""
-    vectors_block = (
-        "\n".join(f"  {v}" for v in impact_vectors)
-        if impact_vectors
-        else "  (no specific vectors extracted — use macro impacts above as guide)"
-    )
-    takeaway_constraint = ""
-    if investor_takeaway:
-        takeaway_lines = "\n".join(f"  {i + 1}. {t}" for i, t in enumerate(investor_takeaway))
-        takeaway_constraint = (
-            "=== INVESTOR TAKEAWAY ALIGNMENT (BINDING CONSTRAINT) ===\n"
-            "Phase 1 macro analysis produced these investor recommendations:\n"
-            f"{takeaway_lines}\n\n"
-            "BINDING RULE: A holding MUST NOT be marked Bearish with High confidence if the\n"
-            "takeaway above explicitly recommends buying, increasing, or gaining exposure to it\n"
-            "or its sector. If you are about to assign Bearish to a holding that the takeaway\n"
-            "recommends buying, STOP — you have likely misclassified a commodity PRODUCER as a\n"
-            "CONSUMER. Re-read the COMMODITY SHOCK DIFFERENTIATION rule and revise.\n"
-        )
-
-    prompt = (
-        "You are a geopolitical risk analyst performing PHASE 2: Portfolio Impact Mapping.\n"
-        "Your task: map the macro findings from Phase 1 onto each specific holding.\n\n"
-        f"Geopolitical context:\n{query}\n\n"
-        f"Phase 1 macro impacts:\n{impacts_lines}\n\n"
-        f"{signals_section}\n\n"
-        "=== MACRO IMPACT VECTORS (from Phase 1) ===\n"
-        "These are the directional forces this geopolitical event creates:\n"
-        f"{vectors_block}\n\n"
-        "=== MULTI-HORIZON VERDICT RULE ===\n"
-        "A holding's short-term and long-term outlook can differ — this is valid and expected.\n"
-        "- short_term_impact: effect over days/weeks (e.g. sentiment shock, price dislocation)\n"
-        "- long_term_impact: effect over months/quarters (e.g. structural shift, policy response)\n"
-        "- verdict: reflects the NET or DOMINANT timeframe impact. If short-term is Bearish but "
-        "long-term is clearly Bullish (or vice versa), choose the direction with greater magnitude "
-        "and explain the divergence in reasoning. Do NOT default to Neutral just because the two "
-        "horizons conflict — that divergence itself is the insight.\n\n"
-        "=== COMPETING VECTORS — FORCE A VERDICT (CRITICAL) ===\n"
-        "When a ticker is exposed to MULTIPLE vectors pointing in opposite directions "
-        "(e.g. [Bearish][ExportBans] AND [Bullish][MineralDemand]), you MUST:\n"
-        "1. Weigh which vector has greater magnitude for THIS specific asset.\n"
-        "2. Choose Bullish or Bearish based on the stronger vector.\n"
-        "3. Acknowledge the opposing vector in the reasoning field.\n"
-        "Neutral is NOT acceptable when opposing vectors both apply — it is a cop-out that "
-        "destroys the value of the analysis. Neutral means NO exposure to ANY vector.\n\n"
-        "=== MULTI-VECTOR PORTFOLIO MATCH ===\n"
-        "Evaluate each holding against EVERY vector across ALL themes — not just the dominant one.\n"
-        "- A ticker may miss Theme A entirely but have clear exposure to Theme B — that earns "
-        "a directional verdict from Theme B, not Neutral.\n"
-        "- Example: a defense ETF has no exposure to payment processing (Theme A) but clear "
-        "exposure to accelerated NATO budgets (Theme B) → Bullish, not Neutral.\n\n"
-        "=== EXPOSURE-CHANNEL CLASSIFICATION (MANDATORY — classify before verdict) ===\n"
-        "For EACH holding, identify its transmission channel FIRST, then assign the verdict.\n"
-        "Tag the channel at the start of the reasoning field:\n"
-        "  • [direct-operational]   — the holding has assets, employees, or production in the\n"
-        "                             affected geography (e.g. an oil producer in the conflict zone).\n"
-        "  • [supply-chain-input]   — the holding buys a critical input from the affected region\n"
-        "                             (e.g. a chip maker sourcing rare earths from a sanctioned country).\n"
-        "  • [commodity-price]      — the holding's revenue or costs move directly with a commodity\n"
-        "                             that the event affects (e.g. an airline exposed to jet fuel).\n"
-        "  • [macro-risk-sentiment] — the holding has NO direct operational or supply-chain link\n"
-        "                             to the affected geography; it is affected only through broad\n"
-        "                             risk-off moves, currency shifts, or second-order policy responses.\n"
-        "  • [none]                 — no meaningful exposure; Neutral verdict required.\n\n"
-        "CRITICAL RULE — geographic proximity ≠ operational exposure:\n"
-        "Do NOT assert [direct-operational] or [supply-chain-input] unless the holding has\n"
-        "documented assets, suppliers, or revenue in the affected geography.\n"
-        "Counter-example: TSMC is headquartered in Taiwan, NOT the Middle East. An Iran-Israel\n"
-        "escalation does NOT cause TSMC production delays. The correct channel is\n"
-        "[macro-risk-sentiment] — oil shock → risk-off → elevated Taiwan Strait risk via\n"
-        "China opportunism, NOT a direct supply disruption.\n\n"
-        "=== ZERO-IMPACT / HONEST NEUTRAL RULE ===\n"
-        "Mark Neutral ONLY when the ticker has NO meaningful exposure to ANY vector across ALL "
-        "themes AND no competing vectors to weigh. Neutral reasoning must name each theme it "
-        "misses: 'Neutral — No exposure to [Theme A], [Theme B], or [Theme C]. Core business "
-        "is [X], which is structurally isolated from this geopolitical event.'\n\n"
-        "=== VECTOR-MAPPING RULE ===\n"
-        "- Direction must match the dominant vector: [Bearish] vector → Bearish verdict.\n"
-        "- Name the specific vector, its theme, and any opposing vector in the reasoning.\n\n"
-        f"{COMMODITY_SHOCK_RULE}\n\n"
-        "=== SPECIAL ASSET CLASS RULES (NON-NEGOTIABLE) ===\n"
-        "VIX / Volatility Index (ticker: ^VIX or VIX):\n"
-        "  The VIX measures implied equity volatility and moves INVERSELY to equities.\n"
-        "  - Bearish/risk-off macro outlook → VIX verdict MUST be Bullish (fear rises).\n"
-        "  - Bullish/risk-on macro outlook  → VIX verdict should be Bearish (complacency).\n"
-        "  Cross-holding check: scan every other holding in this SAME portfolio batch. "
-        "If ANY equity, index (^DJI, SPY, QQQ), or mega-cap (AAPL, NVDA, etc.) is assessed "
-        "as Bearish, that is definitive evidence of risk-off conditions — VIX MUST be Bullish. "
-        "Do NOT assign Bearish or Neutral to VIX if other holdings in this batch are Bearish.\n"
-        "  A Bearish market + Bearish VIX is a fatal logical contradiction that will be "
-        "auto-corrected downstream — avoid it at the source.\n"
-        "  Do not apply normal vector mapping to VIX — apply inverse logic instead.\n\n"
-        "Broad Market Indices (^DJI, ^GSPC, ^SPX, ^IXIC, SPY, QQQ, IWM, etc.):\n"
-        "  These indices move with overall equity sentiment — they cannot be Neutral when you\n"
-        "  have already concluded the macro outlook is directional.\n"
-        "  - If your own reasoning for an index uses words like 'negatively impacting',\n"
-        "    'downward pressure', 'headwinds', 'decline', 'sell-off', or 'risk-off' →\n"
-        "    verdict MUST be Bearish, not Neutral.\n"
-        "  - If your reasoning uses 'supportive', 'upside', 'rally', 'risk-on' →\n"
-        "    verdict MUST be Bullish, not Neutral.\n"
-        "  Neutral on a broad index is only valid when the macro outlook is genuinely balanced\n"
-        "  with offsetting forces of equal magnitude.\n\n"
-        f"{takeaway_constraint}\n"
-        f"Assess EXACTLY these {len(portfolio)} investment holdings in the order listed:\n"
-        f"{holdings_lines}\n\n"
-        f"Return exactly {len(portfolio)} entries. "
-        "Use the EXACT ticker and name values shown. Do not substitute or add holdings."
-    )
-
-    try:
-        output: PortfolioAnalysisOutput = _portfolio_llm.invoke(prompt)
-        return _correct_tickers(output.impacts, portfolio)
-    except Exception as exc:
-        logger.error("dedicated portfolio LLM call failed: %s", exc, exc_info=True)
-        return []
-
-
-# -------------------------
 # Analysis Node
 # -------------------------
 
 def analysis_node(state: DynamicAgentState) -> DynamicAgentState:
     """
-    Evidence-grounded, scenario-aware market impact analysis.
+    PHASE 1: Evidence-grounded, scenario-aware macro market impact analysis.
 
-    Portfolio impacts are produced in two independent passes:
-      1. Dedicated focused LLM call (_run_portfolio_analysis) — primary, best quality.
-      2. Fallback embedded in the main AnalysisOutput call — fires when pass 1 returns empty.
-    At least one of the two passes will always populate the section when portfolio is set.
+    This node now produces ONLY macro outputs (market_impacts, risks, scenarios,
+    investor_takeaway, impact_vectors, confidence, sources).  Portfolio impact
+    analysis has been moved to the map-reduce sub-pipeline:
+      macro_context_node → ticker_analyst_node (×N, parallel) → reduce_ticker_results_node
     """
 
     query = state.get("query", "")
@@ -693,13 +425,8 @@ def analysis_node(state: DynamicAgentState) -> DynamicAgentState:
     retrieved_chunks = state.get("retrieved_chunks", [])
     signals = state.get("signals", {})
     source_quality = state.get("source_quality") or {}
-    portfolio: Optional[list[PortfolioHolding]] = state.get("portfolio")
 
-    logger.info(
-        "analysis_node: portfolio=%s (%d holdings)",
-        "SET" if portfolio else "NONE",
-        len(portfolio) if portfolio else 0,
-    )
+    logger.info("analysis_node: PHASE 1 macro analysis only")
 
     evidence_block = _format_evidence(retrieved_chunks, max_items=12)
 
@@ -788,17 +515,6 @@ def analysis_node(state: DynamicAgentState) -> DynamicAgentState:
     # Domain checklist — inject must-consider chokepoints for detected topics
     domain_checklist_block = _build_domain_checklist_block(query, plan)
 
-    # Build portfolio block for the main prompt (fallback path)
-    portfolio_block = ""
-    if portfolio:
-        portfolio_prices = signals.get("portfolio_prices", {})
-        ticker_list = ", ".join(h.get("ticker", "") for h in portfolio)
-        portfolio_block = (
-            "\n\n" + _format_portfolio_block(portfolio, portfolio_prices) +
-            f"\n\nCRITICAL: populate portfolio_impacts with EXACTLY {len(portfolio)} entries "
-            f"using ONLY these tickers in this order: {ticker_list}."
-        )
-
     prompt = f"""
 You are a senior geopolitical risk analyst advising institutional investors.
 
@@ -819,7 +535,6 @@ Evidence:
 {benchmark_block}
 {live_anchor_block}
 {domain_checklist_block}
-{portfolio_block}
 
 Structural rules:
 - Do NOT introduce risks inside market_impacts.
@@ -880,93 +595,6 @@ Permitted sources (retrieved for this query):
         sources = output.sources
 
     # -------------------------
-    # Portfolio analysis — two independent passes
-    # -------------------------
-
-    portfolio_impacts: Optional[list[dict]] = None
-
-    if portfolio:
-        portfolio_prices = signals.get("portfolio_prices", {})
-
-        # Pass 1: dedicated focused LLM call (primary — correct tickers + relevant content)
-        dedicated_impacts = _run_portfolio_analysis(
-            portfolio=portfolio,
-            portfolio_prices=portfolio_prices,
-            query=query,
-            market_impacts=market_impacts,
-            signals_block=signals_block,
-            impact_vectors=impact_vectors,
-            investor_takeaway=investor_takeaway,
-        )
-
-        if dedicated_impacts:
-            logger.info(
-                "analysis_node: dedicated portfolio call produced %d/%d entries",
-                len(dedicated_impacts), len(portfolio),
-            )
-            portfolio_impacts = [p.model_dump() for p in dedicated_impacts]
-
-        else:
-            # Pass 2: fallback — use portfolio_impacts from the main AnalysisOutput call
-            logger.warning(
-                "analysis_node: dedicated portfolio call returned empty — trying main-call fallback"
-            )
-            if output.portfolio_impacts:
-                corrected = _correct_tickers(output.portfolio_impacts, portfolio)
-                portfolio_impacts = [p.model_dump() for p in corrected]
-                logger.info(
-                    "analysis_node: fallback produced %d/%d entries",
-                    len(portfolio_impacts), len(portfolio),
-                )
-            else:
-                # Pass 3: both LLM passes returned nothing — generate placeholder entries
-                logger.warning(
-                    "analysis_node: both portfolio passes returned empty — using placeholders"
-                )
-                placeholders = _correct_tickers([], portfolio)
-                portfolio_impacts = [p.model_dump() for p in placeholders]
-
-    # Deterministic enforcement — applied after ALL LLM passes so it catches
-    # any remaining VIX-inverse or index-alignment violations regardless of
-    # which path (dedicated, fallback, or placeholder) produced the impacts.
-    if portfolio_impacts:
-        portfolio_impacts, enforcement_log = enforce_asset_class_verdicts(portfolio_impacts)
-        if enforcement_log:
-            logger.info(
-                "analysis_node: deterministic enforcement applied %d correction(s): %s",
-                len(enforcement_log), enforcement_log,
-            )
-
-    # Takeaway alignment — if the investor_takeaway explicitly mentions a ticker
-    # alongside a positive signal ("buy ALB", "increase SQM exposure"), that
-    # holding cannot remain Bearish.
-    if portfolio_impacts and investor_takeaway:
-        portfolio_impacts, alignment_log = detect_takeaway_misalignments(
-            portfolio_impacts, investor_takeaway
-        )
-        if alignment_log:
-            logger.info(
-                "analysis_node: takeaway-alignment corrected %d holding(s): %s",
-                len(alignment_log), alignment_log,
-            )
-
-    # H-E: Portfolio net synthesis — aggregated stance across all holdings.
-    portfolio_net: Optional[dict] = None
-    if portfolio_impacts:
-        portfolio_net = _run_portfolio_net_synthesis(
-            portfolio_impacts=portfolio_impacts,
-            query=query,
-            investor_takeaway=investor_takeaway,
-        )
-        logger.info(
-            "analysis_node: portfolio_net=%s (B=%d / Br=%d / N=%d)",
-            portfolio_net.get("net_verdict"),
-            portfolio_net.get("bull_count", 0),
-            portfolio_net.get("bear_count", 0),
-            portfolio_net.get("neutral_count", 0),
-        )
-
-    # -------------------------
     # Defensive fallbacks for main analysis fields
     # -------------------------
 
@@ -1004,8 +632,6 @@ Permitted sources (retrieved for this query):
         "confidence":        confidence,
         "sources":           sources,
         "impact_vectors":    impact_vectors,
-        "portfolio_impacts": portfolio_impacts,
-        "portfolio_net":     portfolio_net,
         "debug": {
             **(state.get("debug") or {}),
             "analysis_reasoning":         output.reasoning,
