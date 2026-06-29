@@ -1,8 +1,12 @@
 """
 Deterministic verdict-enforcement rules and query-benchmark extraction.
 
-Three functions are exported and called from both nodes_analysis and
-nodes_consistency so the same logic is never duplicated:
+Four functions are exported and called from nodes_reduce / nodes_consistency:
+
+  enforce_text_label_sync(impacts) — phrase-scan the prose fields of each
+      ticker dict and correct the market_sentiment label when bearish or
+      bullish signal phrases dominate without an offsetting counterforce.
+      Run FIRST so asset-class rules below can override where needed.
 
   enforce_asset_class_verdicts(impacts) — post-process serialised portfolio
       dicts; corrects VIX inverse and index-alignment violations without an LLM.
@@ -22,6 +26,95 @@ import logging
 import re
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Text-to-label synchronization phrase lists
+# ---------------------------------------------------------------------------
+
+_TEXT_BEARISH_SIGNALS: frozenset[str] = frozenset({
+    "compressed margins", "margin compression", "headwinds",
+    "revenue loss", "revenue losses", "disrupted operations",
+    "increased costs", "lower volumes", "pricing pressure",
+    "demand destruction", "challenging environment", "slower growth",
+    "reduced capital investment", "higher borrowing costs",
+    "increased credit risk", "lower loan growth", "compress valuations",
+    "dampen consumer spending", "downward pressure", "ongoing challenges",
+    "supply chain disruptions", "delayed shipments", "repricing pressures",
+    "reduced revenue", "cost pressures", "margin squeeze",
+})
+
+_TEXT_BULLISH_SIGNALS: frozenset[str] = frozenset({
+    "increased revenue", "expanding margins", "capital cost reductions",
+    "volume uplift", "demand acceleration", "margin expansion",
+    "revenue growth", "higher revenue", "improved margins",
+    "expanding demand", "cost reduction",
+})
+
+
+def enforce_text_label_sync(
+    impacts: list[dict],
+) -> tuple[list[dict], list[str]]:
+    """
+    Deterministic text-to-label synchronization.
+
+    Scans the prose fields of every ticker dict and counts Bearish/Bullish
+    signal phrase hits. If the dominant signal direction contradicts the
+    model's market_sentiment label, the label is corrected:
+
+      - net Bearish prose + Bullish verdict  → Bearish
+      - net Bearish prose + Neutral verdict  → Bearish
+      - net Bullish prose + Neutral verdict  → Bullish
+
+    Should be called BEFORE enforce_asset_class_verdicts so that VIX/index
+    asset-class rules can override the prose-sync result where financial
+    logic requires it (e.g. VIX is always Bullish when equities are Bearish).
+
+    Returns (corrected_impacts, override_log).
+    """
+    overrides: list[str] = []
+    result: list[dict] = []
+
+    for p in impacts:
+        p = dict(p)
+
+        combined = " ".join([
+            p.get("short_term_analysis", ""),
+            p.get("short_term_impact", ""),
+            p.get("long_term_analysis", ""),
+            p.get("long_term_impact", ""),
+            p.get("causal_reasoning", ""),
+            p.get("reasoning", ""),
+        ]).lower()
+
+        bear_hits = sum(1 for phrase in _TEXT_BEARISH_SIGNALS if phrase in combined)
+        bull_hits = sum(1 for phrase in _TEXT_BULLISH_SIGNALS if phrase in combined)
+
+        if bear_hits == bull_hits:
+            result.append(p)
+            continue
+
+        current = p.get("market_sentiment") or p.get("verdict", "Neutral")
+        new_verdict: str | None = None
+
+        if bear_hits > bull_hits and current in ("Bullish", "Neutral"):
+            new_verdict = "Bearish"
+        elif bull_hits > bear_hits and current == "Neutral":
+            new_verdict = "Bullish"
+
+        if new_verdict:
+            p["market_sentiment"] = new_verdict
+            p["verdict"]          = new_verdict
+            msg = (
+                f"Text-label sync: {p.get('ticker')} {current} → {new_verdict} "
+                f"(bear_hits={bear_hits}, bull_hits={bull_hits})"
+            )
+            overrides.append(msg)
+            logger.info("verdict_rules: %s", msg)
+
+        result.append(p)
+
+    return result, overrides
+
 
 # ---------------------------------------------------------------------------
 # Asset-class taxonomy constants
