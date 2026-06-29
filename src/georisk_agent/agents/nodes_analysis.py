@@ -1,5 +1,5 @@
 import logging
-from typing import List, Dict, Any, Literal, Optional
+from typing import List, Dict, Any, Literal
 
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
