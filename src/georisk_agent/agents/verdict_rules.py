@@ -87,9 +87,12 @@ def enforce_asset_class_verdicts(
     """
     overrides: list[str] = []
 
+    def _verdict(p: dict) -> str:
+        return p.get("market_sentiment") or p.get("verdict", "Neutral")
+
     # Detect whether any non-VIX equity/index is Bearish in this batch.
     equity_bearish = any(
-        p.get("verdict") == "Bearish"
+        _verdict(p) == "Bearish"
         for p in impacts
         if (p.get("ticker") or "").upper() not in _VIX_TICKERS
     )
@@ -99,35 +102,46 @@ def enforce_asset_class_verdicts(
         p = dict(p)          # shallow copy — never mutate shared state dicts
         ticker_upper = (p.get("ticker") or "").upper()
 
+        current_verdict = _verdict(p)
+
         # ── Rule 1: VIX inverse ──────────────────────────────────────────
         if ticker_upper in _VIX_TICKERS:
-            if equity_bearish and p.get("verdict") != "Bullish":
-                old_verdict = p.get("verdict", "?")
-                p["verdict"] = "Bullish"
-                p["reasoning"] = (
+            if equity_bearish and current_verdict != "Bullish":
+                old_verdict = current_verdict
+                p["verdict"]          = "Bullish"
+                p["market_sentiment"] = "Bullish"
+                annotation = (
                     "[VIX inverse-correlation rule applied] "
-                    + p.get("reasoning", "")
+                    + (p.get("reasoning") or p.get("causal_reasoning", ""))
                     + " The VIX moves inversely to equities; with other portfolio "
                     "holdings assessed as Bearish the market is in risk-off mode, "
                     "so VIX must be Bullish."
                 ).strip()
+                p["reasoning"]         = annotation
+                p["causal_reasoning"]  = annotation
                 msg = f"VIX override: {p.get('ticker')} {old_verdict} → Bullish (equity holdings are Bearish)"
                 overrides.append(msg)
                 logger.info("verdict_rules: %s", msg)
 
         # ── Rule 2: Index alignment ──────────────────────────────────────
-        elif ticker_upper in _INDEX_TICKERS and p.get("verdict") == "Neutral":
+        elif ticker_upper in _INDEX_TICKERS and current_verdict == "Neutral":
             combined = " ".join([
                 p.get("reasoning", ""),
+                p.get("causal_reasoning", ""),
                 p.get("short_term_impact", ""),
+                p.get("short_term_analysis", ""),
                 p.get("long_term_impact", ""),
+                p.get("long_term_analysis", ""),
             ]).lower()
             if any(kw in combined for kw in _BEARISH_KEYWORDS):
-                p["verdict"] = "Bearish"
-                p["reasoning"] = (
+                p["verdict"]          = "Bearish"
+                p["market_sentiment"] = "Bearish"
+                annotation = (
                     "[Index alignment rule applied] "
-                    + p.get("reasoning", "")
+                    + (p.get("reasoning") or p.get("causal_reasoning", ""))
                 ).strip()
+                p["reasoning"]        = annotation
+                p["causal_reasoning"] = annotation
                 msg = (
                     f"Index override: {p.get('ticker')} Neutral → Bearish "
                     "(reasoning contains bearish language)"
@@ -215,19 +229,22 @@ def detect_takeaway_misalignments(
     result: list[dict] = [dict(p) for p in impacts]
     for idx in buy_recommended:
         p = result[idx]
-        if p.get("verdict") == "Bearish":
-            old = "Bearish"
-            p["verdict"] = "Bullish"
-            p["reasoning"] = (
+        current = p.get("market_sentiment") or p.get("verdict", "Neutral")
+        if current == "Bearish":
+            annotation = (
                 "[Takeaway-alignment correction] "
-                + p.get("reasoning", "")
+                + (p.get("reasoning") or p.get("causal_reasoning", ""))
                 + " The investor takeaway explicitly recommends increasing exposure to "
                 "this ticker; a Bearish verdict contradicts that guidance. Likely cause: "
                 "commodity producer misclassified as a consumer — producers benefit from "
                 "commodity price spikes, not suffer from them."
             ).strip()
+            p["verdict"]          = "Bullish"
+            p["market_sentiment"] = "Bullish"
+            p["reasoning"]        = annotation
+            p["causal_reasoning"] = annotation
             msg = (
-                f"Takeaway alignment: {p.get('ticker')} {old} → Bullish "
+                f"Takeaway alignment: {p.get('ticker')} Bearish → Bullish "
                 "(takeaway explicitly recommends buying this ticker)"
             )
             overrides.append(msg)
@@ -282,9 +299,12 @@ def check_scenario_polarity(
     if bear_score == bull_score:
         return []
 
+    def _v(p: dict) -> str:
+        return p.get("market_sentiment") or p.get("verdict", "Neutral")
+
     total          = max(len(portfolio_impacts), 1)
-    bull_holdings  = sum(1 for p in portfolio_impacts if p.get("verdict") == "Bullish")
-    bear_holdings  = sum(1 for p in portfolio_impacts if p.get("verdict") == "Bearish")
+    bull_holdings  = sum(1 for p in portfolio_impacts if _v(p) == "Bullish")
+    bear_holdings  = sum(1 for p in portfolio_impacts if _v(p) == "Bearish")
 
     conflicts: list[str] = []
 
