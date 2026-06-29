@@ -28,7 +28,7 @@ from georisk_agent.agents.schemas_portfolio import TickerHoldingAnalysis
 logger = logging.getLogger(__name__)
 
 _llm = ChatOpenAI(
-    model=settings.model_name,
+    model=settings.ticker_model_name,
     api_key=settings.openai_api_key,
     temperature=0.2,
 )
@@ -50,21 +50,11 @@ The output verdict MUST reflect the immediate 3–12 month macroeconomic impact
 window defined by the scenario. Do NOT base the verdict on 3–5 year long-term
 secular recovery potential or historical brand resilience.
 
-RULE 0B — LOGIC-VERDICT CONSISTENCY (HARD CONSTRAINT):
-If your short_term_analysis or long_term_analysis contains ANY phrases indicating
-macroeconomic strain, operational deceleration, financing headwinds, or valuation
-compression — including but not limited to:
-  - "reduced capital investment", "challenging environment", "revenue losses",
-    "margin compression"
-  - "higher borrowing costs", "increased credit risk", "lower loan growth",
-    "compress valuations"
-  - "dampen consumer spending", "slower growth", "downward pressure",
-    "ongoing challenges"
-  - "supply chain disruptions", "delayed shipments", "repricing pressures"
-The final market_sentiment CANNOT be "Bullish". If the macro scenario introduces
-headwinds that slow down operations or expand capital costs, the verdict MUST be
-"Bearish" or "Neutral". You are strictly forbidden from writing a negative
-description and resolving it with an optimistic verdict.
+RULE 0B — LOGIC-VERDICT CONSISTENCY:
+If your short_term_analysis or long_term_analysis describes operational
+headwinds, financing pressure, demand slowdowns, or valuation compression,
+the verdict must be "Bearish" or "Neutral" — never "Bullish". Write the
+analysis honestly; Python post-processing will enforce label consistency.
 
 RULE 0C — NO BRAND BIAS / MEGA-CAP HALO:
 Mega-cap status, infinite secular market demand, or historical brand loyalty cannot
