@@ -3,6 +3,7 @@ from georisk_agent.agents.verdict_rules import (
     enforce_asset_class_verdicts,
     extract_price_benchmarks,
     check_scenario_polarity,
+    RulePriority,
 )
 
 
@@ -28,18 +29,20 @@ class TestVIXInverseRule:
             _holding("^DJI", "Bearish", "downward pressure from trade war"),
             _holding("^VIX", "Bearish", "volatility expected to stay low"),
         ]
-        result, overrides = enforce_asset_class_verdicts(impacts)
+        result, rule_results = enforce_asset_class_verdicts(impacts)
         vix = next(p for p in result if p["ticker"] == "^VIX")
         assert vix["verdict"] == "Bullish"
-        assert len(overrides) == 1
-        assert "VIX override" in overrides[0]
+        assert len(rule_results) == 1
+        assert rule_results[0]["rule_source"] == "INVARIANT_VIX"
+        assert rule_results[0]["priority"] == int(RulePriority.INVARIANT)
+        assert "VIX override" in rule_results[0]["description"]
 
     def test_vix_forced_bullish_when_stock_bearish(self):
         impacts = [
             _holding("AAPL", "Bearish", "supply chain disruption"),
             _holding("^VIX", "Neutral", "macro unclear"),
         ]
-        result, overrides = enforce_asset_class_verdicts(impacts)
+        result, rule_results = enforce_asset_class_verdicts(impacts)
         vix = next(p for p in result if p["ticker"] == "^VIX")
         assert vix["verdict"] == "Bullish"
 
@@ -48,20 +51,20 @@ class TestVIXInverseRule:
             _holding("SPY", "Bearish", "risk-off"),
             _holding("^VIX", "Bullish", "fear spike"),
         ]
-        result, overrides = enforce_asset_class_verdicts(impacts)
+        result, rule_results = enforce_asset_class_verdicts(impacts)
         vix = next(p for p in result if p["ticker"] == "^VIX")
         assert vix["verdict"] == "Bullish"
-        assert overrides == []
+        assert rule_results == []
 
     def test_vix_stays_neutral_when_no_bearish_equity(self):
         impacts = [
             _holding("AAPL", "Bullish", "strong demand"),
             _holding("^VIX", "Neutral", "calm markets"),
         ]
-        result, overrides = enforce_asset_class_verdicts(impacts)
+        result, rule_results = enforce_asset_class_verdicts(impacts)
         vix = next(p for p in result if p["ticker"] == "^VIX")
         assert vix["verdict"] == "Neutral"
-        assert overrides == []
+        assert rule_results == []
 
     def test_vix_reasoning_annotated_on_override(self):
         impacts = [
@@ -77,7 +80,7 @@ class TestVIXInverseRule:
             _holding("spy", "Bearish", "market decline"),
             _holding("vix", "Bearish", "wrong verdict"),
         ]
-        result, overrides = enforce_asset_class_verdicts(impacts)
+        result, rule_results = enforce_asset_class_verdicts(impacts)
         vix = next(p for p in result if p["ticker"] == "vix")
         assert vix["verdict"] == "Bullish"
 
@@ -87,32 +90,34 @@ class TestIndexAlignmentRule:
         impacts = [
             _holding("^DJI", "Neutral", "negatively impacting the index"),
         ]
-        result, overrides = enforce_asset_class_verdicts(impacts)
+        result, rule_results = enforce_asset_class_verdicts(impacts)
         assert result[0]["verdict"] == "Bearish"
-        assert len(overrides) == 1
-        assert "Index override" in overrides[0]
+        assert len(rule_results) == 1
+        assert rule_results[0]["rule_source"] == "STRUCTURAL_INDEX_ALIGNMENT"
+        assert rule_results[0]["priority"] == int(RulePriority.STRUCTURAL)
+        assert "Index override" in rule_results[0]["description"]
 
     def test_neutral_index_with_downward_pressure_in_short_term(self):
         impacts = [
             _holding("SPY", "Neutral", short="downward pressure from rate hikes"),
         ]
-        result, overrides = enforce_asset_class_verdicts(impacts)
+        result, rule_results = enforce_asset_class_verdicts(impacts)
         assert result[0]["verdict"] == "Bearish"
 
     def test_neutral_index_with_sell_off_in_long_term(self):
         impacts = [
             _holding("QQQ", "Neutral", long_="extended sell-off expected"),
         ]
-        result, overrides = enforce_asset_class_verdicts(impacts)
+        result, rule_results = enforce_asset_class_verdicts(impacts)
         assert result[0]["verdict"] == "Bearish"
 
     def test_neutral_index_without_bearish_language_unchanged(self):
         impacts = [
             _holding("^DJI", "Neutral", "balanced forces; no clear direction"),
         ]
-        result, overrides = enforce_asset_class_verdicts(impacts)
+        result, rule_results = enforce_asset_class_verdicts(impacts)
         assert result[0]["verdict"] == "Neutral"
-        assert overrides == []
+        assert rule_results == []
 
     def test_bearish_index_reasoning_annotation_added(self):
         impacts = [
@@ -125,22 +130,22 @@ class TestIndexAlignmentRule:
         impacts = [
             _holding("AAPL", "Neutral", "downward pressure on margins"),
         ]
-        result, overrides = enforce_asset_class_verdicts(impacts)
+        result, rule_results = enforce_asset_class_verdicts(impacts)
         assert result[0]["verdict"] == "Neutral"
-        assert overrides == []
+        assert rule_results == []
 
     def test_bearish_index_already_bearish_unchanged(self):
         impacts = [
             _holding("^GSPC", "Bearish", "risk-off sell-off"),
         ]
-        result, overrides = enforce_asset_class_verdicts(impacts)
+        result, rule_results = enforce_asset_class_verdicts(impacts)
         assert result[0]["verdict"] == "Bearish"
-        assert overrides == []
+        assert rule_results == []
 
     def test_empty_impacts_returns_empty(self):
-        result, overrides = enforce_asset_class_verdicts([])
+        result, rule_results = enforce_asset_class_verdicts([])
         assert result == []
-        assert overrides == []
+        assert rule_results == []
 
     def test_original_dicts_not_mutated(self):
         original = _holding("^VIX", "Bearish", "wrong")

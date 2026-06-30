@@ -14,6 +14,7 @@ class Settings(BaseModel):
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
     model_name: str = os.getenv("MODEL_NAME", "gpt-4o-mini")
     ticker_model_name: str = os.getenv("TICKER_MODEL_NAME", "gpt-4o-mini")
+    consistency_model_name: str = os.getenv("CONSISTENCY_MODEL_NAME", "gpt-4o")
     app_env: str = os.getenv("APP_ENV", "dev")
 
     # --- PostgreSQL / pgvector ---

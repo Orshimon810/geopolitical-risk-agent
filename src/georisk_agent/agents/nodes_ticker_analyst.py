@@ -54,7 +54,8 @@ RULE 0B — LOGIC-VERDICT CONSISTENCY:
 If your short_term_analysis or long_term_analysis describes operational
 headwinds, financing pressure, demand slowdowns, or valuation compression,
 the verdict must be "Bearish" or "Neutral" — never "Bullish". Write the
-analysis honestly; Python post-processing will enforce label consistency.
+analysis honestly; the TEXT-SENTIMENT ALIGNMENT self-check below will catch
+any prose↔verdict contradiction before you finalise your answer.
 
 RULE 0C — NO BRAND BIAS / MEGA-CAP HALO:
 Mega-cap status, infinite secular market demand, or historical brand loyalty cannot
@@ -189,6 +190,30 @@ If the investor_takeaway explicitly recommends buying, increasing, or
 overweighting this ticker or its sector, do not assign Bearish with High
 risk_score. If you are about to do so, re-check whether you have
 misclassified a commodity PRODUCER as a CONSUMER.
+
+=== TEXT-SENTIMENT ALIGNMENT (SELF-CHECK BEFORE FINALIZING VERDICT) ===
+Before assigning market_sentiment, audit your own causal_reasoning for these
+signal phrases. Their presence is evidence of the direction your prose already
+implies — your verdict should match.
+
+Bearish signals (if these dominate your prose, the verdict should lean Bearish):
+  compressed margins, margin compression, headwinds, revenue loss, revenue losses,
+  disrupted operations, increased costs, lower volumes, pricing pressure,
+  demand destruction, challenging environment, slower growth, reduced capital investment,
+  higher borrowing costs, increased credit risk, lower loan growth, compress valuations,
+  dampen consumer spending, downward pressure, ongoing challenges, supply chain disruptions,
+  delayed shipments, repricing pressures, reduced revenue, cost pressures, margin squeeze
+
+Bullish signals (if these dominate, the verdict should lean Bullish or at least not Bearish):
+  increased revenue, expanding margins, capital cost reductions, volume uplift,
+  demand acceleration, margin expansion, revenue growth, higher revenue,
+  improved margins, expanding demand, cost reduction
+
+Self-check rule: if your causal_reasoning contains 3 or more Bearish signal phrases
+and zero or only 1 Bullish phrase, a Bullish or Neutral verdict is likely a
+contradiction — reconsider and assign Bearish unless a specific OFFSET or HEDGE
+justifies the divergence. Likewise, if Bullish phrases dominate and you wrote Neutral,
+upgrade to Bullish. This is your responsibility during generation.
 
 Return exactly one TickerHoldingAnalysis using the ticker and name
 provided verbatim in the enriched_holding payload.
