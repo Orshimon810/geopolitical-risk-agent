@@ -1,119 +1,66 @@
 """
 Deterministic verdict-enforcement rules and query-benchmark extraction.
 
-Four functions are exported and called from nodes_reduce / nodes_consistency:
+Three exported correction functions apply Python-side guardrails after the
+ticker-analyst LLM has produced its initial verdicts.  Only structural and
+mathematical invariants live here; phrase-based text-to-label inference has
+been moved into the ticker-analyst system prompt (TEXT-SENTIMENT ALIGNMENT
+section) so the model self-corrects during generation.
 
-  enforce_text_label_sync(impacts) — phrase-scan the prose fields of each
-      ticker dict and correct the market_sentiment label when bearish or
-      bullish signal phrases dominate without an offsetting counterforce.
-      Run FIRST so asset-class rules below can override where needed.
+Exported correction functions (called from nodes_reduce / nodes_consistency):
 
-  enforce_asset_class_verdicts(impacts) — post-process serialised portfolio
-      dicts; corrects VIX inverse and index-alignment violations without an LLM.
+  enforce_asset_class_verdicts(impacts) — INVARIANT + STRUCTURAL rules:
+      Rule 1 (INVARIANT_VIX): VIX instruments always move inverse to equities;
+          forced Bullish when any non-VIX holding is Bearish.
+      Rule 2 (STRUCTURAL_INDEX_ALIGNMENT): broad market indices whose own
+          reasoning contains bearish-language keywords are forced Bearish when
+          the model returned Neutral.
 
-  detect_takeaway_misalignments(impacts, investor_takeaway) — scans the
-      investor_takeaway bullets for explicit buy/increase signals adjacent to a
-      portfolio ticker and corrects any Bearish verdict for that ticker.
+  detect_takeaway_misalignments(impacts, investor_takeaway) — STRUCTURAL:
+      Corrects Bearish verdicts for tickers the investor_takeaway explicitly
+      recommends buying (literal word-boundary ticker match in takeaway text).
 
-  extract_price_benchmarks(query) — regex scan for explicit price anchors in
-      the user query (e.g. "Brent spikes past $110/bbl") used as scenario
+  check_scenario_polarity(scenarios, portfolio_impacts) — DETECTION ONLY:
+      Returns conflict description strings when macro-scenario polarity
+      diverges from portfolio verdicts by more than 60%; does not mutate.
+
+  extract_price_benchmarks(query) — UTILITY:
+      Regex scan for explicit price anchors in the user query used as scenario
       baselines instead of the live market feed price.
+
+Rule taxonomy
+─────────────
+  RulePriority.INVARIANT  (3) — mathematical/financial law (VIX inverse)
+  RulePriority.STRUCTURAL (2) — explicit structural constraint (ticker in
+                                 takeaway, index keyword-alignment)
 """
 
 from __future__ import annotations
 
 import logging
 import re
+from enum import IntEnum
+from typing import TypedDict
 
 logger = logging.getLogger(__name__)
 
+
 # ---------------------------------------------------------------------------
-# Text-to-label synchronization phrase lists
+# Rule taxonomy types
 # ---------------------------------------------------------------------------
 
-_TEXT_BEARISH_SIGNALS: frozenset[str] = frozenset({
-    "compressed margins", "margin compression", "headwinds",
-    "revenue loss", "revenue losses", "disrupted operations",
-    "increased costs", "lower volumes", "pricing pressure",
-    "demand destruction", "challenging environment", "slower growth",
-    "reduced capital investment", "higher borrowing costs",
-    "increased credit risk", "lower loan growth", "compress valuations",
-    "dampen consumer spending", "downward pressure", "ongoing challenges",
-    "supply chain disruptions", "delayed shipments", "repricing pressures",
-    "reduced revenue", "cost pressures", "margin squeeze",
-})
-
-_TEXT_BULLISH_SIGNALS: frozenset[str] = frozenset({
-    "increased revenue", "expanding margins", "capital cost reductions",
-    "volume uplift", "demand acceleration", "margin expansion",
-    "revenue growth", "higher revenue", "improved margins",
-    "expanding demand", "cost reduction",
-})
+class RulePriority(IntEnum):
+    STRUCTURAL = 2   # explicit structural constraint
+    INVARIANT  = 3   # mathematical / financial law
 
 
-def enforce_text_label_sync(
-    impacts: list[dict],
-) -> tuple[list[dict], list[str]]:
-    """
-    Deterministic text-to-label synchronization.
-
-    Scans the prose fields of every ticker dict and counts Bearish/Bullish
-    signal phrase hits. If the dominant signal direction contradicts the
-    model's market_sentiment label, the label is corrected:
-
-      - net Bearish prose + Bullish verdict  → Bearish
-      - net Bearish prose + Neutral verdict  → Bearish
-      - net Bullish prose + Neutral verdict  → Bullish
-
-    Should be called BEFORE enforce_asset_class_verdicts so that VIX/index
-    asset-class rules can override the prose-sync result where financial
-    logic requires it (e.g. VIX is always Bullish when equities are Bearish).
-
-    Returns (corrected_impacts, override_log).
-    """
-    overrides: list[str] = []
-    result: list[dict] = []
-
-    for p in impacts:
-        p = dict(p)
-
-        combined = " ".join([
-            p.get("short_term_analysis", ""),
-            p.get("short_term_impact", ""),
-            p.get("long_term_analysis", ""),
-            p.get("long_term_impact", ""),
-            p.get("causal_reasoning", ""),
-            p.get("reasoning", ""),
-        ]).lower()
-
-        bear_hits = sum(1 for phrase in _TEXT_BEARISH_SIGNALS if phrase in combined)
-        bull_hits = sum(1 for phrase in _TEXT_BULLISH_SIGNALS if phrase in combined)
-
-        if bear_hits == bull_hits:
-            result.append(p)
-            continue
-
-        current = p.get("market_sentiment") or p.get("verdict", "Neutral")
-        new_verdict: str | None = None
-
-        if bear_hits > bull_hits and current in ("Bullish", "Neutral"):
-            new_verdict = "Bearish"
-        elif bull_hits > bear_hits and current == "Neutral":
-            new_verdict = "Bullish"
-
-        if new_verdict:
-            p["market_sentiment"] = new_verdict
-            p["verdict"]          = new_verdict
-            msg = (
-                f"Text-label sync: {p.get('ticker')} {current} → {new_verdict} "
-                f"(bear_hits={bear_hits}, bull_hits={bull_hits})"
-            )
-            overrides.append(msg)
-            logger.info("verdict_rules: %s", msg)
-
-        result.append(p)
-
-    return result, overrides
+class RuleResult(TypedDict):
+    ticker:           str   # portfolio ticker the correction applied to
+    rule_source:      str   # e.g. "INVARIANT_VIX", "STRUCTURAL_INDEX_ALIGNMENT"
+    priority:         int   # RulePriority value
+    original_verdict: str
+    final_verdict:    str
+    description:      str   # human-readable explanation (for logs and debug state)
 
 
 # ---------------------------------------------------------------------------
@@ -158,27 +105,27 @@ _VIX_TICKERS: frozenset[str] = frozenset({"^VIX", "VIX", "UVXY", "VXX"})
 
 def enforce_asset_class_verdicts(
     impacts: list[dict],
-) -> tuple[list[dict], list[str]]:
+) -> tuple[list[dict], list[RuleResult]]:
     """
     Apply two non-negotiable, deterministic corrections to serialised
     portfolio-impact dicts (state['portfolio_impacts']).
 
-    Rule 1 — VIX inverse correlation:
+    Rule 1 — VIX inverse correlation (INVARIANT_VIX):
         If ANY non-VIX holding in the same portfolio batch is marked Bearish,
         the market outlook is definitively risk-off.  Any VIX ticker whose
         verdict is not already Bullish is corrected to Bullish and the
         reasoning is annotated.
 
-    Rule 2 — Index alignment:
+    Rule 2 — Index alignment (STRUCTURAL_INDEX_ALIGNMENT):
         If a broad market index is marked Neutral but the combined text of its
         reasoning, short_term_impact, and long_term_impact contains one or more
         bearish-language keywords, the verdict is forced to Bearish.
 
     Returns:
-        (corrected_impacts, override_log)  — override_log is a list of
-        human-readable strings describing each correction made (for debug state).
+        (corrected_impacts, rule_results)  — rule_results is a list of
+        RuleResult dicts describing each correction made (for debug state).
     """
-    overrides: list[str] = []
+    rule_results: list[RuleResult] = []
 
     def _verdict(p: dict) -> str:
         return p.get("market_sentiment") or p.get("verdict", "Neutral")
@@ -212,9 +159,16 @@ def enforce_asset_class_verdicts(
                 ).strip()
                 p["reasoning"]         = annotation
                 p["causal_reasoning"]  = annotation
-                msg = f"VIX override: {p.get('ticker')} {old_verdict} → Bullish (equity holdings are Bearish)"
-                overrides.append(msg)
-                logger.info("verdict_rules: %s", msg)
+                desc = f"VIX override: {p.get('ticker')} {old_verdict} → Bullish (equity holdings are Bearish)"
+                rule_results.append(RuleResult(
+                    ticker=p.get("ticker", ""),
+                    rule_source="INVARIANT_VIX",
+                    priority=int(RulePriority.INVARIANT),
+                    original_verdict=old_verdict,
+                    final_verdict="Bullish",
+                    description=desc,
+                ))
+                logger.info("[INVARIANT_VIX] %s", desc)
 
         # ── Rule 2: Index alignment ──────────────────────────────────────
         elif ticker_upper in _INDEX_TICKERS and current_verdict == "Neutral":
@@ -235,16 +189,23 @@ def enforce_asset_class_verdicts(
                 ).strip()
                 p["reasoning"]        = annotation
                 p["causal_reasoning"] = annotation
-                msg = (
+                desc = (
                     f"Index override: {p.get('ticker')} Neutral → Bearish "
                     "(reasoning contains bearish language)"
                 )
-                overrides.append(msg)
-                logger.info("verdict_rules: %s", msg)
+                rule_results.append(RuleResult(
+                    ticker=p.get("ticker", ""),
+                    rule_source="STRUCTURAL_INDEX_ALIGNMENT",
+                    priority=int(RulePriority.STRUCTURAL),
+                    original_verdict="Neutral",
+                    final_verdict="Bearish",
+                    description=desc,
+                ))
+                logger.info("[STRUCTURAL_INDEX_ALIGNMENT] %s", desc)
 
         result.append(p)
 
-    return result, overrides
+    return result, rule_results
 
 
 # ---------------------------------------------------------------------------
@@ -275,7 +236,7 @@ _POSITIVE_SIGNALS: frozenset[str] = frozenset({
 def detect_takeaway_misalignments(
     impacts: list[dict],
     investor_takeaway: list[str],
-) -> tuple[list[dict], list[str]]:
+) -> tuple[list[dict], list[RuleResult]]:
     """
     Detect and correct Bearish verdicts for holdings that the investor_takeaway
     explicitly recommends buying or increasing (matched by literal ticker symbol).
@@ -291,12 +252,12 @@ def detect_takeaway_misalignments(
     and the consistency validator LLM.
 
     Returns:
-        (corrected_impacts, override_log)
+        (corrected_impacts, rule_results)
     """
     if not investor_takeaway or not impacts:
         return impacts, []
 
-    overrides: list[str] = []
+    rule_results: list[RuleResult] = []
 
     # Build ticker → index map (upper-cased for case-insensitive matching).
     ticker_to_idx: dict[str, int] = {
@@ -336,18 +297,25 @@ def detect_takeaway_misalignments(
             p["market_sentiment"] = "Bullish"
             p["reasoning"]        = annotation
             p["causal_reasoning"] = annotation
-            msg = (
+            desc = (
                 f"Takeaway alignment: {p.get('ticker')} Bearish → Bullish "
                 "(takeaway explicitly recommends buying this ticker)"
             )
-            overrides.append(msg)
-            logger.info("verdict_rules: %s", msg)
+            rule_results.append(RuleResult(
+                ticker=p.get("ticker", ""),
+                rule_source="STRUCTURAL_TAKEAWAY_ALIGNMENT",
+                priority=int(RulePriority.STRUCTURAL),
+                original_verdict="Bearish",
+                final_verdict="Bullish",
+                description=desc,
+            ))
+            logger.info("[STRUCTURAL_TAKEAWAY_ALIGNMENT] %s", desc)
 
-    return result, overrides
+    return result, rule_results
 
 
 # ---------------------------------------------------------------------------
-# Scenario polarity check (H-F)
+# Scenario polarity check (detection only — does not mutate)
 # ---------------------------------------------------------------------------
 
 _SCENARIO_BEARISH_KEYWORDS: frozenset[str] = frozenset({
@@ -371,7 +339,7 @@ def check_scenario_polarity(
     portfolio_impacts: list[dict],
 ) -> list[str]:
     """
-    H-F: Detect polarity mismatches between macro scenarios and portfolio verdicts.
+    Detect polarity mismatches between macro scenarios and portfolio verdicts.
 
     A polarity conflict exists when:
       - Scenarios are predominantly bearish (bear_score > bull_score) BUT
@@ -380,6 +348,7 @@ def check_scenario_polarity(
         more than 60% of portfolio holdings are Bearish.
 
     Returns a list of conflict description strings (empty = no conflict).
+    This function is detection-only and does not mutate impacts.
     """
     if not scenarios or not portfolio_impacts:
         return []

@@ -15,6 +15,7 @@ from georisk_agent.agents.verdict_rules import (
     detect_takeaway_misalignments,
     enforce_asset_class_verdicts,
     extract_price_benchmarks,
+    RulePriority,
 )
 from georisk_agent.agents.nodes_analysis import COMMODITY_SHOCK_RULE
 
@@ -44,32 +45,33 @@ class TestTakeawayMisalignmentDetection:
     def test_bearish_ticker_with_explicit_buy_corrected_to_bullish(self):
         impacts = [_h("ALB", "Bearish", "lithium price spike compresses margins")]
         takeaway = ["Increase exposure to ALB and other lithium miners"]
-        result, log = detect_takeaway_misalignments(impacts, takeaway)
+        result, rule_results = detect_takeaway_misalignments(impacts, takeaway)
         assert result[0]["verdict"] == "Bullish"
-        assert len(log) == 1
-        assert "ALB" in log[0]
+        assert len(rule_results) == 1
+        assert rule_results[0]["rule_source"] == "STRUCTURAL_TAKEAWAY_ALIGNMENT"
+        assert "ALB" in rule_results[0]["description"]
 
     def test_bullish_ticker_with_buy_signal_unchanged(self):
         impacts = [_h("SQM", "Bullish", "lithium revenues surge")]
         takeaway = ["Buy SQM — lithium producer benefits"]
-        result, log = detect_takeaway_misalignments(impacts, takeaway)
+        result, rule_results = detect_takeaway_misalignments(impacts, takeaway)
         assert result[0]["verdict"] == "Bullish"
-        assert log == []
+        assert rule_results == []
 
     def test_ticker_not_mentioned_in_takeaway_unchanged(self):
         impacts = [_h("ALB", "Bearish", "cost pressure")]
         takeaway = ["Increase exposure to oil majors like XOM"]
-        result, log = detect_takeaway_misalignments(impacts, takeaway)
+        result, rule_results = detect_takeaway_misalignments(impacts, takeaway)
         assert result[0]["verdict"] == "Bearish"   # ALB not in takeaway → no change
-        assert log == []
+        assert rule_results == []
 
     def test_positive_signal_word_required(self):
         # Takeaway mentions ALB but in a neutral or negative context.
         impacts = [_h("ALB", "Bearish", "cost pressure")]
         takeaway = ["Monitor ALB for further downside"]
-        result, log = detect_takeaway_misalignments(impacts, takeaway)
+        result, rule_results = detect_takeaway_misalignments(impacts, takeaway)
         assert result[0]["verdict"] == "Bearish"
-        assert log == []
+        assert rule_results == []
 
     def test_multiple_tickers_corrected_in_one_pass(self):
         impacts = [
@@ -81,39 +83,40 @@ class TestTakeawayMisalignmentDetection:
             "Increase ALB and SQM exposure — lithium producers benefit",
             "Avoid TSLA due to battery input cost headwinds",
         ]
-        result, log = detect_takeaway_misalignments(impacts, takeaway)
+        result, rule_results = detect_takeaway_misalignments(impacts, takeaway)
         alb = next(p for p in result if p["ticker"] == "ALB")
         sqm = next(p for p in result if p["ticker"] == "SQM")
         tsla = next(p for p in result if p["ticker"] == "TSLA")
         assert alb["verdict"] == "Bullish"
         assert sqm["verdict"] == "Bullish"
         assert tsla["verdict"] == "Bearish"   # consumer → unchanged
-        assert len(log) == 2
+        assert len(rule_results) == 2
+        assert all(r["rule_source"] == "STRUCTURAL_TAKEAWAY_ALIGNMENT" for r in rule_results)
 
     def test_empty_takeaway_returns_unchanged(self):
         impacts = [_h("ALB", "Bearish")]
-        result, log = detect_takeaway_misalignments(impacts, [])
+        result, rule_results = detect_takeaway_misalignments(impacts, [])
         assert result[0]["verdict"] == "Bearish"
-        assert log == []
+        assert rule_results == []
 
     def test_empty_impacts_returns_empty(self):
-        result, log = detect_takeaway_misalignments([], ["Buy ALB"])
+        result, rule_results = detect_takeaway_misalignments([], ["Buy ALB"])
         assert result == []
-        assert log == []
+        assert rule_results == []
 
     def test_case_insensitive_ticker_match(self):
         impacts = [_h("alb", "Bearish")]
         takeaway = ["Rotate into ALB — lithium producer"]
-        result, log = detect_takeaway_misalignments(impacts, takeaway)
+        result, rule_results = detect_takeaway_misalignments(impacts, takeaway)
         assert result[0]["verdict"] == "Bullish"
 
     def test_partial_ticker_not_matched(self):
         # "ALBA" should NOT match ticker "ALB".
         impacts = [_h("ALB", "Bearish")]
         takeaway = ["Increase ALBA mining exposure"]
-        result, log = detect_takeaway_misalignments(impacts, takeaway)
+        result, rule_results = detect_takeaway_misalignments(impacts, takeaway)
         assert result[0]["verdict"] == "Bearish"   # word-boundary prevents false match
-        assert log == []
+        assert rule_results == []
 
     def test_reasoning_annotated_on_correction(self):
         impacts = [_h("ALB", "Bearish", "producer misclassified")]
@@ -150,14 +153,15 @@ class TestChileLithiumScenario:
             "Increase exposure to ALB and SQM — lithium producers benefit from price spike",
             "Reduce TSLA — EV manufacturer faces margin compression",
         ]
-        result, log = detect_takeaway_misalignments(impacts, takeaway)
+        result, rule_results = detect_takeaway_misalignments(impacts, takeaway)
         alb = next(p for p in result if p["ticker"] == "ALB")
         sqm = next(p for p in result if p["ticker"] == "SQM")
         tsla = next(p for p in result if p["ticker"] == "TSLA")
         assert alb["verdict"] == "Bullish", "ALB is a producer — must be Bullish on price spike"
         assert sqm["verdict"] == "Bullish", "SQM is a producer — must be Bullish on price spike"
         assert tsla["verdict"] == "Bearish", "TSLA is a consumer — stays Bearish"
-        assert len(log) == 2
+        assert len(rule_results) == 2
+        assert all(r["rule_source"] == "STRUCTURAL_TAKEAWAY_ALIGNMENT" for r in rule_results)
 
     def test_vix_still_corrected_alongside_commodity_fix(self):
         # VIX rule must not regress when commodity correction also fires.
@@ -167,8 +171,9 @@ class TestChileLithiumScenario:
             _h("^VIX", "Bearish", "LLM got this wrong too"),
         ]
         takeaway = ["Buy ALB — lithium producer benefits"]
-        # Step 1: commodity + VIX enforcement
+        # Step 1: VIX enforcement
         result_v, vix_log = enforce_asset_class_verdicts(impacts)
+        assert vix_log[0]["rule_source"] == "INVARIANT_VIX"
         # Step 2: takeaway alignment on top
         result_a, align_log = detect_takeaway_misalignments(result_v, takeaway)
 
@@ -212,14 +217,15 @@ class TestTaiwanSemiconductorScenario:
             "Buy ASML — semiconductor equipment scarcity premium expands",
             "Avoid AAPL — consumer end-market faces production shortfall",
         ]
-        result, log = detect_takeaway_misalignments(impacts, takeaway)
+        result, rule_results = detect_takeaway_misalignments(impacts, takeaway)
         asml = next(p for p in result if p["ticker"] == "ASML")
         aapl = next(p for p in result if p["ticker"] == "AAPL")
         tsm = next(p for p in result if p["ticker"] == "TSM")
         assert asml["verdict"] == "Bullish"   # ASML explicitly in takeaway with buy signal
         assert aapl["verdict"] == "Bearish"   # consumer → unchanged
         assert tsm["verdict"] == "Bearish"    # TSM not mentioned in takeaway → unchanged by this fn
-        assert len(log) == 1
+        assert len(rule_results) == 1
+        assert rule_results[0]["rule_source"] == "STRUCTURAL_TAKEAWAY_ALIGNMENT"
 
     def test_consumer_chip_company_stays_bearish(self):
         # AAPL, DELL, HPQ as chip consumers must remain Bearish when no buy signal in takeaway.
@@ -228,9 +234,9 @@ class TestTaiwanSemiconductorScenario:
             _h("DELL", "Bearish", "component shortage"),
         ]
         takeaway = ["Reduce exposure to consumer electronics — chip shortage squeezes margins"]
-        result, log = detect_takeaway_misalignments(impacts, takeaway)
+        result, rule_results = detect_takeaway_misalignments(impacts, takeaway)
         assert all(p["verdict"] == "Bearish" for p in result)
-        assert log == []
+        assert rule_results == []
 
     def test_taiwan_vix_not_regressed(self):
         # Taiwan crisis is Bearish for equities → VIX must be Bullish.
