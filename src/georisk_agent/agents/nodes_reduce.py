@@ -7,8 +7,7 @@ ticker_analyses accumulator, this node:
   1. Collects all accumulated TickerHoldingAnalysis dicts.
   2. Reorders them to match the original portfolio order and fills any gaps
      (missed tickers) with Neutral/Low placeholders.
-  3. Applies three deterministic post-processing rules from verdict_rules.py:
-       • enforce_text_label_sync        (prose-phrase scan → label correction)
+  3. Applies two deterministic post-processing rules from verdict_rules.py:
        • enforce_asset_class_verdicts   (VIX inverse, index alignment)
        • detect_takeaway_misalignments  (Bearish + buy-recommended = correction)
   4. Runs _run_portfolio_net_synthesis to produce the aggregated net stance.
@@ -23,7 +22,6 @@ from typing import Any, Optional
 
 from georisk_agent.app.types import DynamicAgentState
 from georisk_agent.agents.verdict_rules import (
-    enforce_text_label_sync,
     enforce_asset_class_verdicts,
     detect_takeaway_misalignments,
 )
@@ -90,31 +88,29 @@ def reduce_ticker_results_node(state: DynamicAgentState) -> DynamicAgentState:
                 name=h.get("name", h.get("ticker", "?")),
             ))
 
-    # Deterministic post-processing (same rules as the old analysis_node tail)
+    # Deterministic guardrails — structural and invariant rules only.
+    # Text-to-label phrase inference has been moved to the ticker-analyst
+    # system prompt (TEXT-SENTIMENT ALIGNMENT section).
 
-    # 1. Prose-consistency enforcement: correct label when bearish/bullish phrases dominate
-    ordered, sync_log = enforce_text_label_sync(ordered)
-    if sync_log:
-        logger.info(
-            "reduce_ticker_results_node: enforce_text_label_sync applied %d correction(s): %s",
-            len(sync_log), sync_log,
-        )
-
-    # 2. Asset-class rules: VIX inverse correlation + index alignment (may override 1)
+    # 1. Asset-class invariants: VIX inverse correlation + index alignment
     ordered, enforce_log = enforce_asset_class_verdicts(ordered)
     if enforce_log:
         logger.info(
             "reduce_ticker_results_node: enforce_asset_class_verdicts applied %d correction(s): %s",
-            len(enforce_log), enforce_log,
+            len(enforce_log), [r["description"] for r in enforce_log],
         )
 
+    # 2. Structural alignment: correct Bearish verdicts for tickers takeaway explicitly buys
+    align_log: list = []
     if investor_takeaway:
         ordered, align_log = detect_takeaway_misalignments(ordered, investor_takeaway)
         if align_log:
             logger.info(
                 "reduce_ticker_results_node: detect_takeaway_misalignments corrected %d holding(s): %s",
-                len(align_log), align_log,
+                len(align_log), [r["description"] for r in align_log],
             )
+
+    all_rule_results = enforce_log + align_log
 
     # Portfolio net synthesis (imported lazily to avoid circular imports at module load)
     from georisk_agent.agents.nodes_analysis import _run_portfolio_net_synthesis
@@ -140,4 +136,8 @@ def reduce_ticker_results_node(state: DynamicAgentState) -> DynamicAgentState:
         "portfolio_net":     portfolio_net,
         # Reset accumulator so a Reviewer RETRY cycle starts clean
         "ticker_analyses":   [],
+        "debug": {
+            **(state.get("debug") or {}),
+            "rule_results": list(all_rule_results),
+        },
     }

@@ -42,7 +42,7 @@ class ConsistencyCheckOutput(BaseModel):
 
 
 _consistency_llm = ChatOpenAI(
-    model=settings.model_name,
+    model=settings.consistency_model_name,
     api_key=settings.openai_api_key,
     temperature=0.0,
 )
@@ -59,21 +59,21 @@ def consistency_validator_node(state: DynamicAgentState) -> DynamicAgentState:
     if not portfolio_impacts:
         return state
 
-    # Pre-pass: deterministic enforcement before LLM validation.
+    # Pre-pass: deterministic guardrails before LLM validation.
     # Catches VIX-inverse and index-alignment violations that may have slipped
-    # through the analysis node (e.g. via the main-call fallback path).
-    portfolio_impacts, pre_overrides = enforce_asset_class_verdicts(list(portfolio_impacts))
+    # through the reduce node (e.g. via the main-call fallback path).
+    portfolio_impacts, pre_rule_results = enforce_asset_class_verdicts(list(portfolio_impacts))
 
-    # Takeaway alignment: correct Bearish verdicts for tickers the takeaway
+    # Structural alignment: correct Bearish verdicts for tickers the takeaway
     # explicitly recommends buying (literal ticker match in takeaway text).
     _takeaway = state.get("investor_takeaway") or []
     portfolio_impacts, _align_log = detect_takeaway_misalignments(portfolio_impacts, _takeaway)
-    pre_overrides = pre_overrides + _align_log
+    pre_rule_results = pre_rule_results + _align_log
 
-    if pre_overrides:
+    if pre_rule_results:
         logger.info(
             "consistency_validator pre-pass: %d deterministic correction(s): %s",
-            len(pre_overrides), pre_overrides,
+            len(pre_rule_results), [r["description"] for r in pre_rule_results],
         )
 
     # H-F: Scenario polarity check — detect macro scenario vs. portfolio verdict mismatches.
@@ -175,7 +175,7 @@ def consistency_validator_node(state: DynamicAgentState) -> DynamicAgentState:
                 "consistency_check": {
                     "contradictions_found": False,
                     "summary": output.summary,
-                    "pre_pass_overrides": pre_overrides,
+                    "pre_pass_rule_results": list(pre_rule_results),
                     "scenario_polarity_conflicts": polarity_conflicts,
                 },
             },
@@ -207,6 +207,15 @@ def consistency_validator_node(state: DynamicAgentState) -> DynamicAgentState:
 
     logger.info("Consistency validator: corrected %d/%d holdings", fixed_count, len(portfolio_impacts))
 
+    # Final invariant seal: re-run Python hard rules after LLM corrections so
+    # no LLM output can violate a mathematical invariant (e.g. VIX inverse law).
+    corrected_impacts, post_rule_results = enforce_asset_class_verdicts(corrected_impacts)
+    if post_rule_results:
+        logger.info(
+            "consistency_validator post-LLM invariant seal: %d correction(s) re-applied: %s",
+            len(post_rule_results), [r["description"] for r in post_rule_results],
+        )
+
     return {
         **state,
         "portfolio_impacts": corrected_impacts,
@@ -214,7 +223,7 @@ def consistency_validator_node(state: DynamicAgentState) -> DynamicAgentState:
             **(state.get("debug") or {}),
             "consistency_check": {
                 **output.model_dump(),
-                "pre_pass_overrides": pre_overrides,
+                "pre_pass_rule_results": list(pre_rule_results),
                 "scenario_polarity_conflicts": polarity_conflicts,
             },
         },
