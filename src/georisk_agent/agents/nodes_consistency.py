@@ -100,7 +100,9 @@ def consistency_validator_node(state: DynamicAgentState) -> DynamicAgentState:
     holdings_block = "\n".join(
         f"  • {p.get('ticker', '?')} ({p.get('name', '')}): "
         f"verdict={_verdict(p)} | "
-        f"reasoning={_reasoning(p)[:120]}"
+        f"short_term=[{(p.get('short_term_analysis') or p.get('short_term_impact', ''))[:100]}] | "
+        f"long_term=[{(p.get('long_term_analysis') or p.get('long_term_impact', ''))[:100]}] | "
+        f"reasoning=[{_reasoning(p)[:100]}]"
         for p in portfolio_impacts
     )
     takeaway_block = "\n".join(f"  - {t}" for t in investor_takeaway)
@@ -150,13 +152,26 @@ def consistency_validator_node(state: DynamicAgentState) -> DynamicAgentState:
         "- Holdings in sectors not explicitly mentioned in the takeaway.\n"
         "- Verdicts you personally disagree with — only flag explicit text↔verdict conflicts "
         "on the SAME causal vector.\n\n"
+        "=== ADDITIONAL CHECK: WITHIN-TICKER PROSE↔VERDICT ===\n"
+        "For each holding, also compare the holding's OWN short_term and long_term analysis "
+        "text against its verdict — independent of the macro takeaway.\n"
+        "Flag as a contradiction if:\n"
+        "- The holding's short_term or long_term text describes operational headwinds, margin "
+        "compression, supply disruption, or revenue loss — but verdict is Bullish.\n"
+        "- The holding's text describes clear revenue tailwinds, margin expansion, or demand "
+        "acceleration — but verdict is Bearish.\n"
+        "- The two analysis fields describe directional forces consistently (e.g. both Bearish "
+        "language) but the verdict is Neutral or the opposite direction.\n"
+        "Label these in contradiction_description as 'own-text contradiction: [ticker]'.\n"
+        "The TEXT-SENTIMENT ALIGNMENT rule in the ticker analyst may have been overridden — "
+        "this check catches those cases.\n\n"
         "Instructions:\n"
         "1. Check each verdict against the takeaway and market impacts for same-vector conflicts.\n"
-        "2. Only flag when the SAME vector is described as positive in the text but the verdict "
-        "is negative for a directly matching ticker (or vice versa).\n"
-        "3. For each real contradiction: provide the corrected verdict, honest reasoning, and a "
+        "2. Check each verdict against the holding's OWN short_term/long_term analysis text.\n"
+        "3. Only flag when there is a genuine directional conflict on the same causal vector.\n"
+        "4. For each real contradiction: provide the corrected verdict, honest reasoning, and a "
         "brief description of the specific conflict found.\n"
-        "4. Set contradictions_found=true only if at least one genuine same-vector contradiction exists."
+        "5. Set contradictions_found=true only if at least one genuine contradiction exists."
     )
 
     try:

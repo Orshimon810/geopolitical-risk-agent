@@ -83,11 +83,14 @@ class AnalysisOutput(BaseModel):
     )
     scenarios: list[str] = Field(
         description=(
-            "Exactly 2 entries: 'Base case: ...' and 'Escalation case: ...'. "
-            "Each MUST contain specific quantitative projections (percentages, price ranges, timelines). "
-            "FORBIDDEN: vague placeholders like 'conditions evolve without triggering systemic repricing'. "
-            "REQUIRED format per scenario: (a) primary trigger, (b) transmission mechanism, "
-            "(c) specific projections e.g. 'oil +15-20% to $95/bbl', 'd) 3-12 month timeline."
+            "Exactly 3 entries: 'Base case: ...', 'Escalation case: ...', and "
+            "'De-escalation / limited impact case: ...'. "
+            "Each MUST state: (a) primary trigger or threshold, (b) transmission mechanism, "
+            "(c) affected assets and direction, (d) 3-12 month timeline. "
+            "Quantitative projections are encouraged when anchored to live prices or stated benchmarks "
+            "(cite the basis), but direction + mechanism + timeline is the minimum requirement. "
+            "FORBIDDEN: vague non-scenarios ('conditions evolve', 'geopolitical shock drives risk-off'), "
+            "inventing precise numeric figures without a stated derivation basis."
         )
     )
     investor_takeaway: list[str] = Field(
@@ -164,13 +167,19 @@ Before extracting vectors, explicitly deconstruct the query into ALL constituent
 Generate 4-8 vectors total, covering all identified themes. Thin coverage of any theme is a quality defect.
 
 === SCENARIO QUALITY (NON-NEGOTIABLE) ===
-Every scenario must include concrete, measurable projections.
-STRICTLY FORBIDDEN scenarios:
-- "Base case: Conditions evolve without triggering systemic repricing."
-- "Escalation case: A geopolitical shock drives rapid global risk-off behavior."
-- Any scenario that omits specific figures, timelines, or mechanisms.
-REQUIRED: quantitative ranges (e.g., "oil +15-20% to $95/bbl over 3 months"),
-named triggers, and clear transmission paths.
+Every scenario MUST state: (a) primary trigger or threshold, (b) transmission mechanism,
+(c) direction and affected asset classes, (d) approximate 3-12 month timeline.
+STRICTLY FORBIDDEN:
+- Vague non-scenarios: "Conditions evolve without triggering repricing." / "A shock drives risk-off."
+- Any scenario that omits a direction, a named asset class, or a timeline.
+- Inventing precise numeric figures without a stated basis — e.g. "$95.40/bbl" with no
+  derivation is forbidden; "$87-94 (+15-25% from live $75 anchor)" is fine.
+ENCOURAGED when a factual basis exists:
+- Quantitative directional ranges anchored to the LIVE PRICE SCENARIO ANCHORS above or a
+  query-specified benchmark: "oil up 15-25% from $75 → $87-94/bbl over 3-6 months".
+- Historical precedent as the basis: "2022 Brent spike averaged +22% over 6 weeks".
+Direction + mechanism + timeline is ALWAYS required. Precise numbers are OPTIONAL
+and must cite their derivation basis when used.
 
 === SCENARIO PRICE BASELINE HIERARCHY (NON-NEGOTIABLE) ===
 When computing price targets or percentage moves in scenarios, apply this priority order:
@@ -192,13 +201,21 @@ Investor takeaway discipline:
 
 Confidence rules:
 - HIGH only if evidence is strong, consistent, historically validated,
-  AND timing and policy responses are well constrained
+  AND timing and policy responses are well constrained.
+  NOT valid if the event is reported as rumor, alleged, or unconfirmed,
+  or if the query names no specific actor or geography.
 - MEDIUM if evidence is directionally clear but timing, scale,
-  or political responses remain uncertain
-- LOW if evidence is thin, speculative, or indirect
+  or political responses remain uncertain.
+  Also apply MEDIUM (at most) when the query describes a generic unnamed actor
+  ('a country', 'a nation', 'an unspecified state') — missing event parameters
+  limit the precision of any forecast.
+- LOW if evidence is thin, speculative, or indirect.
+  MANDATORY LOW when the query uses hedging language: 'reportedly', 'may', 'could',
+  'allegedly', 'unconfirmed reports suggest', 'sources say', 'rumored', 'possible',
+  'potential'. Conditional events cannot support confident directional projections.
 
 High confidence should be rare in geopolitical analysis.
-Avoid defaulting to "Medium".
+Avoid defaulting to "Medium". When in doubt, downgrade.
 """
 
 
@@ -308,6 +325,18 @@ COMMODITY_SHOCK_RULE = (
     "            Steel mills / auto OEMs (Metal consumers).\n"
     "  ❌ COMMON ERROR: do NOT mark a consumer Bullish just because the underlying commodity\n"
     "     is geopolitically significant — significance ≠ margin tailwind for the buyer.\n\n"
+    "AGRICULTURAL COMMODITY COVERAGE:\n"
+    "When the event involves agricultural commodities (wheat, corn, soybeans, sugar, palm oil,\n"
+    "cocoa, coffee, rice, cotton, fertilizers/potash/urea):\n"
+    "  PRODUCERS (farms, grain traders like ADM/BG, agri-processors, fertilizer makers\n"
+    "  like MOS/NTR/CF): a price spike raises revenue. Default: BULLISH.\n"
+    "  CONSUMERS (food manufacturers, restaurant chains, packaged-food companies, animal-feed\n"
+    "  processors, textile firms): a price spike raises input costs. Default: BEARISH.\n"
+    "  ❌ COMMON ERROR: Do NOT trace long speculative chains to create indirect exposure.\n"
+    "  'Wheat spike → flour → bread price → Coca-Cola customer spending' is too many steps.\n"
+    "  Assign 'supply-chain-input' ONLY if the commodity is a PRIMARY cost driver for this firm\n"
+    "  (>10% of COGS or critical with no ready substitute). Trace ingredients do NOT qualify.\n"
+    "  Coca-Cola's primary commodities are corn syrup, aluminium cans, and PET plastic — not wheat.\n\n"
     "CLASSIFICATION STEP (mandatory): For each holding, write 'Role: Producer' or\n"
     "'Role: Consumer' (or 'Role: Mixed/Vertically-integrated') at the start of the\n"
     "reasoning field before writing the verdict. If uncertain, default to Consumer."
@@ -340,6 +369,7 @@ def _run_portfolio_net_synthesis(
     portfolio_impacts: list[dict],
     query: str,
     investor_takeaway: list[str],
+    macro_confidence: str = "Medium",
 ) -> dict:
     """
     H-E: Compute a net portfolio stance from the finalized per-holding impacts.
@@ -370,6 +400,14 @@ def _run_portfolio_net_synthesis(
         net_conf = "High"
     else:
         net_conf = "Medium"
+
+    # Issue 8: Apply macro confidence ceiling — a Low-confidence macro event
+    # cannot produce a High net portfolio confidence regardless of stock-level scores.
+    if macro_confidence == "Low" and net_conf == "High":
+        net_conf = "Medium"
+        logger.info(
+            "_run_portfolio_net_synthesis: net_conf capped at Medium (macro confidence is Low)"
+        )
 
     holdings_summary = "\n".join(
         f"  • {p.get('ticker', '?')} ({p.get('name', '')}): "
@@ -557,9 +595,10 @@ Market impact discipline:
   and which are relatively more resilient.
 
 Scenario discipline:
-- Provide exactly 2 scenarios: base case and escalation case.
-- Explicitly note any timing mismatch between
-  market reactions and real economic impacts.
+- Provide exactly 3 scenarios: base case, escalation case, and de-escalation / limited-impact case.
+- The de-escalation case should describe either a peaceful resolution, containment,
+  or a scenario where the event fails to materialize or is geographically contained.
+- Explicitly note any timing mismatch between market reactions and real economic impacts.
 
 Source citation discipline:
 - Cite ONLY the sources listed below — do not invent or substitute any other names.
@@ -608,10 +647,11 @@ Permitted sources (retrieved for this query):
             "Markets may be mispricing geopolitical escalation risks due to incorrect assumptions about timing, policy coordination, or containment effectiveness."
         ]
 
-    if len(scenarios) < 2:
+    if len(scenarios) < 3:
         scenarios = [
             "Base case: Evidence was insufficient to produce a specific projection — monitor primary trigger indicators for 30-60 day directional signal.",
             "Escalation case: Evidence was insufficient to produce a specific projection — elevated tail risk warrants defensive positioning until clearer evidence emerges.",
+            "De-escalation / limited impact case: Event fails to escalate or is contained geographically; direct market impact limited to initial risk-off repricing that partially reverses within 4-8 weeks as uncertainty subsides.",
         ]
 
     if not investor_takeaway:
@@ -627,7 +667,7 @@ Permitted sources (retrieved for this query):
         **state,
         "market_impacts":    market_impacts[:6],
         "risks":             risks[:4],
-        "scenarios":         scenarios[:2],
+        "scenarios":         scenarios[:3],
         "investor_takeaway": investor_takeaway[:1],
         "confidence":        confidence,
         "sources":           sources,

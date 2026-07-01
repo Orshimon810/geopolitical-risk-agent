@@ -103,6 +103,26 @@ class MacroEventContext(BaseModel):
             "(e.g. 'hawkish — surprise rate hike', 'dovish — emergency cut'), or null."
         ),
     )
+    event_certainty: Literal["confirmed", "alleged", "speculative", "unknown"] = Field(
+        default="unknown",
+        description=(
+            "Epistemic status of the triggering event: "
+            "'confirmed' = verified, ongoing fact; "
+            "'alleged' = credible but unverified reports (e.g. 'sources say', 'reports suggest'); "
+            "'speculative' = conditional or hypothetical language ('may', 'could', 'reportedly', "
+            "'unconfirmed reports suggest', 'rumored', 'allegedly', 'possible'); "
+            "'unknown' = certainty not determinable from available information."
+        ),
+    )
+    analysis_confidence: Literal["Low", "Medium", "High"] = Field(
+        default="Medium",
+        description=(
+            "Macro-level analysis confidence propagated from the analysis node. "
+            "Set programmatically after LLM generation — do not infer from context. "
+            "Acts as a ceiling on per-holding risk_score: when 'Low', "
+            "no ticker worker should assign risk_score='High'."
+        ),
+    )
 
 
 class TickerHoldingAnalysis(BaseModel):
