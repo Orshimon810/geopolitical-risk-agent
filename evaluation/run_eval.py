@@ -1,3 +1,4 @@
+import argparse
 from collections import Counter
 from benchmark_queries import BENCHMARK_QUERIES
 from evaluator import evaluate_response
@@ -13,11 +14,21 @@ def _print_assertion_results(results: list[dict]) -> None:
     total = len(results)
     print(f"  Regression assertions: {passed}/{total} passed")
     for r in results:
-        icon = "✓" if r["passed"] else "✗"
+        icon = "[PASS]" if r["passed"] else "[FAIL]"
         print(f"    {icon} [{r['label']}] {r['reason']}")
 
 
 def run():
+    parser = argparse.ArgumentParser(description="Run geopolitical risk agent evaluation suite.")
+    parser.add_argument(
+        "--id", type=str, default=None,
+        help="Comma-separated test IDs to run (1-indexed), e.g. --id 9,10,11,12",
+    )
+    args = parser.parse_args()
+    target_ids = (
+        {int(x.strip()) for x in args.id.split(",")} if args.id else None
+    )
+
     print("\nBuilding agent graph...\n")
 
     app = build_legacy_graph()
@@ -27,12 +38,19 @@ def run():
     assertion_totals = Counter()
 
     for i, test in enumerate(BENCHMARK_QUERIES, start=1):
+        if target_ids and i not in target_ids:
+            continue
+
         print(f"\n================ TEST {i} ================")
         focus = test.get("focus", "")
         print(f"Query: {test['query']}")
         print(f"Focus: {focus}\n")
 
-        response = app.invoke({"query": test["query"]})
+        initial_state: dict = {"query": test["query"]}
+        if test.get("portfolio"):
+            initial_state["portfolio"] = test["portfolio"]
+
+        response = app.invoke(initial_state)
 
         if DEBUG:
             print("HAS scenarios?", "scenarios" in response, "value:", response.get("scenarios"))
