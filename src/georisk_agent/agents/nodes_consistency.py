@@ -12,7 +12,7 @@ No-op when portfolio_impacts is empty or absent.
 """
 
 import logging
-from typing import Literal
+from typing import Literal, Optional
 
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
@@ -33,6 +33,23 @@ class TickerCorrection(BaseModel):
     corrected_verdict: Literal["Bullish", "Bearish", "Neutral"]
     corrected_reasoning: str
     contradiction_description: str
+    corrected_short_term_analysis: Optional[str] = Field(
+        default=None,
+        description=(
+            "Rewritten short-term analysis prose aligned with the corrected verdict. "
+            "REQUIRED when the verdict is changed. Remove any text that references the "
+            "old verdict (e.g. 'The Neutral verdict contradicts...', 'As assessed Bearish...'). "
+            "Preserve factual content; adjust directional language to match the new verdict."
+        ),
+    )
+    corrected_long_term_analysis: Optional[str] = Field(
+        default=None,
+        description=(
+            "Rewritten long-term analysis prose aligned with the corrected verdict. "
+            "REQUIRED when the verdict is changed. Remove stale verdict references. "
+            "Preserve factual content; adjust directional language to match the new verdict."
+        ),
+    )
 
 
 class ConsistencyCheckOutput(BaseModel):
@@ -171,7 +188,17 @@ def consistency_validator_node(state: DynamicAgentState) -> DynamicAgentState:
         "3. Only flag when there is a genuine directional conflict on the same causal vector.\n"
         "4. For each real contradiction: provide the corrected verdict, honest reasoning, and a "
         "brief description of the specific conflict found.\n"
-        "5. Set contradictions_found=true only if at least one genuine contradiction exists."
+        "5. ALWAYS provide corrected_short_term_analysis and corrected_long_term_analysis when "
+        "you change a verdict. These rewrites MUST:\n"
+        "   (a) Remove any sentence that references the old verdict label "
+        "(e.g. 'The Neutral verdict contradicts...', 'As assessed Bearish...', "
+        "'The previous Bullish assessment...').\n"
+        "   (b) Adjust directional language to be consistent with the new verdict — "
+        "if corrected to Bullish, remove headwind/compression language; "
+        "if corrected to Bearish, remove tailwind/upside language.\n"
+        "   (c) Preserve all factual content (company names, event descriptions, "
+        "cited mechanisms) — only change the directional framing.\n"
+        "6. Set contradictions_found=true only if at least one genuine contradiction exists."
     )
 
     try:
@@ -210,11 +237,21 @@ def consistency_validator_node(state: DynamicAgentState) -> DynamicAgentState:
             corrected_p["verdict"]          = fix.corrected_verdict
             corrected_p["causal_reasoning"] = fix.corrected_reasoning
             corrected_p["reasoning"]        = fix.corrected_reasoning
+            # Rewrite analysis prose so final text always matches the new verdict.
+            # Without this, stale sentences like "The Neutral verdict contradicts..."
+            # remain visible to users after a Neutral→Bullish correction.
+            if fix.corrected_short_term_analysis:
+                corrected_p["short_term_analysis"] = fix.corrected_short_term_analysis
+                corrected_p["short_term_impact"]   = fix.corrected_short_term_analysis
+            if fix.corrected_long_term_analysis:
+                corrected_p["long_term_analysis"] = fix.corrected_long_term_analysis
+                corrected_p["long_term_impact"]   = fix.corrected_long_term_analysis
             corrected_impacts.append(corrected_p)
             fixed_count += 1
             logger.info(
-                "Consistency fix | %s: %s → %s | %s",
+                "Consistency fix | %s: %s → %s | prose rewritten=%s | %s",
                 p.get("ticker"), original_verdict, fix.corrected_verdict,
+                bool(fix.corrected_short_term_analysis or fix.corrected_long_term_analysis),
                 fix.contradiction_description[:80],
             )
         else:

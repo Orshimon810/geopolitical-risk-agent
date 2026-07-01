@@ -85,6 +85,145 @@ def _classify_query_certainty(query: str) -> tuple[str, str]:
     return "confirmed", ""
 
 
+# ---------------------------------------------------------------------------
+# Event polarity pre-classification (Issue 3)
+# Determines scenario label templates injected into the analysis prompt.
+# Positive events (cooperation, deals) must not use "Escalation case."
+# ---------------------------------------------------------------------------
+
+_POSITIVE_EVENT_RE = re.compile(
+    r'\b(deal|agreement|easing|de-escalation|deescalation|cooperat|normali[sz]|'
+    r'reduced?\s+tensions?|cease[- ]?fire|truce|thaw|'
+    r'lift(?:ing)?\s+(?:of\s+)?(?:restrictions?|ban|sanction|tariff)|'
+    r'waiv(?:e|ing)|ease\s+(?:of\s+)?(?:restrictions?|tensions?)|'
+    r'lower(?:ing)?\s+(?:tariffs?|restrictions?)|'
+    r'remov(?:e|ing)\s+(?:restrictions?|barriers?|tariffs?)|'
+    r'resolv(?:e|ing)\s+(?:dispute|conflict|tension))\b',
+    re.IGNORECASE,
+)
+
+_CONFLICT_EVENT_RE = re.compile(
+    r'\b(attack|war(?:fare)?|blockade|invasion|aggress|airstrikes?|'
+    r'missile\s+(?:strike|attack)|bombing|hostilities|occupation|'
+    r'naval\s+(?:blockade|confrontation)|port\s+clos|strait\s+(?:closure|blockade)|'
+    r'military\s+(?:action|conflict|escalation|exercise)s?\s+(?:near|against|in)|'
+    r'sanction(?:s)?\s+(?:on|against)\b)\b',
+    re.IGNORECASE,
+)
+
+_SCENARIO_LABELS: dict[str, tuple[str, str, str]] = {
+    "conflict": (
+        "Base case",
+        "Escalation case",
+        "De-escalation / limited impact case",
+    ),
+    "positive": (
+        "Base case",
+        "Strong implementation / upside case",
+        "Limited implementation / breakdown risk case",
+    ),
+    "vague": (
+        "Base case",
+        "Moderate impact case",
+        "Low materiality / limited impact case",
+    ),
+}
+
+
+def _classify_event_polarity(query: str) -> str:
+    """
+    Classify event polarity for scenario label template injection.
+    Returns 'positive', 'conflict', or 'vague'.
+    """
+    if _POSITIVE_EVENT_RE.search(query):
+        return "positive"
+    if _CONFLICT_EVENT_RE.search(query):
+        return "conflict"
+    return "vague"
+
+
+def _build_scenario_label_block(polarity: str) -> str:
+    """Return the SCENARIO LABELS block to inject into the analysis prompt."""
+    labels = _SCENARIO_LABELS.get(polarity, _SCENARIO_LABELS["vague"])
+    label_a, label_b, label_c = labels
+    return (
+        f"\n=== SCENARIO LABELS (NON-NEGOTIABLE — derived from event polarity: {polarity}) ===\n"
+        f"Your 3 scenarios MUST use EXACTLY these labels (verbatim):\n"
+        f"  Scenario 1: '{label_a}: ...'\n"
+        f"  Scenario 2: '{label_b}: ...'\n"
+        f"  Scenario 3: '{label_c}: ...'\n"
+        f"Do NOT substitute 'Escalation case' for Scenario 2 when event polarity is '{polarity}'.\n"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Event materiality pre-classification (Issue 7)
+# Determines scope constraints injected into the analysis and ticker prompts.
+# ---------------------------------------------------------------------------
+
+_HIGH_MATERIALITY_RE = re.compile(
+    r'\b(united\s+states|china|european\s+union|russia|iran|opec|'
+    r'oil\s+supply|energy\s+supply|semiconductor|taiwan\s+strait|'
+    r'strait\s+of\s+hormuz|swift|federal\s+reserve|g7|g20|nato|'
+    r'world\s+trade|wto|global\s+supply\s+chain|global\s+financial|'
+    r'sovereign\s+debt|reserve\s+currency)\b',
+    re.IGNORECASE,
+)
+
+_LOW_MATERIALITY_SIGNALS: list[str] = [
+    "luxury wine", "wine tariff", "wine dispute", "cheese tariff", "cheese ban",
+    "chocolate tariff", "whisky tariff", "cognac tariff", "champagne",
+    "luxury good", "luxury food", "niche", "minor dispute", "small bilateral",
+    "boutique", "artisan", "specialty food", "fine wine", "premium wine",
+]
+
+
+def _classify_event_materiality(query: str, plan: list[str]) -> str:
+    """
+    Classify event materiality/scope.
+    Returns 'high', 'moderate', or 'low'.
+    """
+    combined = (query + " " + " ".join(plan)).lower()
+    if _HIGH_MATERIALITY_RE.search(combined):
+        return "high"
+    if any(sig in combined for sig in _LOW_MATERIALITY_SIGNALS):
+        return "low"
+    return "moderate"
+
+
+def _build_materiality_block(materiality: str) -> str:
+    """Return a materiality constraint block to inject into the analysis prompt."""
+    if materiality == "low":
+        return (
+            "\n=== EVENT MATERIALITY: LOW (NON-NEGOTIABLE) ===\n"
+            "This event has limited systemic reach — it affects a niche sector or a "
+            "bilateral trade relationship between small/medium economies.\n"
+            "MANDATORY constraints for ALL output fields:\n"
+            "- market_impacts: restrict to the DIRECTLY affected sector/commodity. "
+            "Do NOT expand to unrelated sectors (logistics, hospitality, tourism, "
+            "broader consumer spending) unless the event DIRECTLY involves those sectors.\n"
+            "- scenarios: acknowledge that broad market contagion is UNLIKELY unless "
+            "the dispute escalates to involve a major economy or critical supply chain. "
+            "Scenarios should describe contained sector-level effects.\n"
+            "- investor_takeaway: MUST begin by acknowledging limited systemic reach "
+            "('Direct investment implications are likely contained to [specific sector/country]'). "
+            "Recommend monitoring over broad portfolio repositioning. "
+            "Do NOT make broad sector allocation calls (e.g. 'increase technology exposure') "
+            "for a niche event.\n"
+            "- confidence: LOW or MEDIUM maximum for low-materiality events — "
+            "the event's limited scale reduces analytical confidence.\n"
+        )
+    if materiality == "high":
+        return (
+            "\n=== EVENT MATERIALITY: HIGH ===\n"
+            "This event involves major economies or critical infrastructure "
+            "(energy supply, financial system, semiconductor chokepoints). "
+            "Full systemic analysis is warranted — trace second-order effects and "
+            "cross-asset contagion in detail.\n"
+        )
+    return ""  # moderate: no special block needed
+
+
 # -------------------------
 # Structured output schemas
 # -------------------------
@@ -673,6 +812,16 @@ def analysis_node(state: DynamicAgentState) -> DynamicAgentState:
             _event_certainty_label,
         )
 
+    # Event polarity classification — drives scenario label templates.
+    event_polarity = _classify_event_polarity(query)
+    scenario_label_block = _build_scenario_label_block(event_polarity)
+    logger.info("analysis_node: event_polarity=%s", event_polarity)
+
+    # Event materiality classification — drives scope constraints.
+    event_materiality = _classify_event_materiality(query, plan)
+    materiality_block = _build_materiality_block(event_materiality)
+    logger.info("analysis_node: event_materiality=%s", event_materiality)
+
     prompt = f"""
 You are a senior geopolitical risk analyst advising institutional investors.
 
@@ -692,7 +841,7 @@ Evidence:
 {signals_block}
 {benchmark_block}
 {live_anchor_block}
-{domain_checklist_block}{hedge_block}
+{domain_checklist_block}{hedge_block}{scenario_label_block}{materiality_block}
 
 Structural rules:
 - Do NOT introduce risks inside market_impacts.
@@ -794,9 +943,12 @@ Permitted sources (retrieved for this query):
         "data_gap":          data_gap,
         "sources":           sources,
         "impact_vectors":    impact_vectors,
+        "event_materiality": event_materiality,
         "debug": {
             **(state.get("debug") or {}),
             "analysis_reasoning":         output.reasoning,
             "analysis_structured_output": output.model_dump(),
+            "event_polarity":             event_polarity,
+            "event_materiality":          event_materiality,
         },
     }
