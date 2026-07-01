@@ -182,25 +182,29 @@ class TestPortfolioNetSynthesis:
 # assert_polarity_conflicts_logged
 # ---------------------------------------------------------------------------
 
+_PORTFOLIO_STUB = [{"ticker": "TEST"}]
+
+
 class TestPolarityConflictsLogged:
     def test_key_present_and_empty_passes(self):
-        r = _resp(debug={"consistency_check": {"scenario_polarity_conflicts": []}})
+        r = _resp(portfolio=_PORTFOLIO_STUB, debug={"consistency_check": {"scenario_polarity_conflicts": []}})
         passed, _ = assert_polarity_conflicts_logged(r)
         assert passed
 
     def test_key_present_with_conflicts_passes(self):
-        r = _resp(debug={"consistency_check": {"scenario_polarity_conflicts": ["conflict A"]}})
+        r = _resp(portfolio=_PORTFOLIO_STUB, debug={"consistency_check": {"scenario_polarity_conflicts": ["conflict A"]}})
         passed, reason = assert_polarity_conflicts_logged(r)
         assert passed
         assert "1 conflicts" in reason
 
     def test_key_absent_fails(self):
-        r = _resp(debug={"consistency_check": {}})
+        r = _resp(portfolio=_PORTFOLIO_STUB, debug={"consistency_check": {}})
         passed, _ = assert_polarity_conflicts_logged(r)
         assert not passed
 
     def test_no_debug_fails(self):
-        passed, _ = assert_polarity_conflicts_logged({})
+        r = _resp(portfolio=_PORTFOLIO_STUB)
+        passed, _ = assert_polarity_conflicts_logged(r)
         assert not passed
 
 
