@@ -90,9 +90,9 @@ def run():
         print(f"  {rating}: {ratings.get(rating, 0)}")
     print(f"\nREGRESSION ASSERTIONS: {assertion_totals['passed']}/{total_assertions} passed")
     if assertion_totals["failed"] > 0:
-        print("  ⚠ Some regression assertions failed — review notes above")
+        print("  [WARN] Some regression assertions failed -- review notes above")
     else:
-        print("  ✓ All regression assertions passed")
+        print("  [OK] All regression assertions passed")
     print("===================================")
 
 
