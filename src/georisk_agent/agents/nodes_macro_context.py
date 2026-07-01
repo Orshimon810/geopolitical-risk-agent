@@ -118,9 +118,27 @@ def build_enriched_portfolio(
             "  - economic_role: Producer (sells a commodity), Consumer (buys it as input), "
             "Mixed (both), or Unrelated (no commodity exposure).\n"
             "  - primary_commodity: the most relevant commodity for this holding's "
-            "revenue/cost structure, or null.\n"
+            "revenue/cost structure, or null. Only list if it is a PRIMARY (>15% of COGS) "
+            "or CRITICAL (no readily available substitute) input/output. Omit trace ingredients.\n"
             "  - headquarters_country: country of incorporation / primary listing.\n"
+            "    SPECIAL: if you do not recognize the ticker as a real publicly-traded company, "
+            "set headquarters_country='UNRECOGNIZED_TICKER', economic_role='Unrelated', "
+            "geographic_asset_footprint=[], primary_commodity=null.\n"
             f"{commodity_hint}\n\n"
+            "=== CRITICAL VALUE-CHAIN CLASSIFICATION RULES ===\n"
+            "1. FABLESS CHIP DESIGNERS (NVIDIA, AMD, Qualcomm, MediaTek, ARM): "
+            "These firms DESIGN chips but do NOT fabricate silicon — they outsource manufacturing "
+            "to foundries (TSMC, Samsung, GlobalFoundries). "
+            "economic_role=Consumer (they buy foundry capacity), NOT Producer.\n"
+            "2. SEMICONDUCTOR EQUIPMENT MAKERS (ASML, Applied Materials, Lam Research, KLA, "
+            "Tokyo Electron): These firms supply manufacturing TOOLS to chip fabs — upstream of "
+            "production. economic_role=Producer (sells equipment to the chip ecosystem).\n"
+            "3. GOVERNMENT CONTRACTORS (Lockheed Martin, Raytheon, Northrop Grumman, BAE Systems, "
+            "L3Harris): These firms SELL weapons and defense systems TO governments. "
+            "economic_role=Producer. Do NOT classify as Consumer.\n"
+            "4. SUPPLY-CHAIN DEPTH: primary_commodity should only be set when the commodity "
+            "is a PRIMARY cost driver (>10% of COGS or no ready substitute). "
+            "Trace or indirect ingredients do not qualify.\n\n"
             "Holdings to classify:\n"
             f"{holdings_list}\n\n"
             f"Return exactly {len(need_enrichment)} entries in the same order."
@@ -172,7 +190,7 @@ def macro_context_node(state: DynamicAgentState) -> DynamicAgentState:
 
     impacts_text   = "\n".join(f"- {m}" for m in market_impacts[:5])
     vectors_text   = "\n".join(f"- {v}" for v in impact_vectors[:8])
-    scenarios_text = "\n".join(f"- {s}" for s in scenarios[:2])
+    scenarios_text = "\n".join(f"- {s}" for s in scenarios[:3])
 
     prompt = (
         f"Geopolitical query: {query}\n\n"
@@ -184,20 +202,33 @@ def macro_context_node(state: DynamicAgentState) -> DynamicAgentState:
         "  2. Lists the countries/regions DIRECTLY affected (not just mentioned).\n"
         "  3. Identifies the primary commodity price shock if any.\n"
         "  4. Copies the impact_vectors verbatim from the list above.\n"
-        "  5. States any monetary policy signal implied by the event, or null."
+        "  5. States any monetary policy signal implied by the event, or null.\n"
+        "  6. Sets event_certainty based on the query language:\n"
+        "     'confirmed' — event stated as ongoing verified fact;\n"
+        "     'alleged' — attributed to credible but unverified sources ('reports say', "
+        "'sources claim', 'according to sources');\n"
+        "     'speculative' — conditional or hypothetical language ('may', 'could', "
+        "'reportedly', 'unconfirmed', 'rumored', 'allegedly', 'possible', 'potential', "
+        "'sources suggest', 'unconfirmed reports suggest');\n"
+        "     'unknown' — certainty not determinable from the query text."
     )
+
+    # Issue 8: read current macro confidence so it can be carried to all ticker workers
+    macro_confidence = state.get("confidence", "Medium")
 
     try:
         ctx: MacroEventContext = _macro_context_llm.invoke(prompt)
-        # Guarantee impact_vectors are carried through even if LLM truncates them
-        if not ctx.impact_vectors and impact_vectors:
-            ctx = MacroEventContext(
-                event_summary=ctx.event_summary,
-                affected_geographies=ctx.affected_geographies,
-                primary_commodity_shock=ctx.primary_commodity_shock,
-                impact_vectors=impact_vectors,
-                monetary_policy_signal=ctx.monetary_policy_signal,
-            )
+        # Always rebuild to guarantee impact_vectors and analysis_confidence are correct;
+        # analysis_confidence is always overridden from state — never trusted from LLM.
+        ctx = MacroEventContext(
+            event_summary=ctx.event_summary,
+            affected_geographies=ctx.affected_geographies,
+            primary_commodity_shock=ctx.primary_commodity_shock,
+            impact_vectors=ctx.impact_vectors or impact_vectors,
+            monetary_policy_signal=ctx.monetary_policy_signal,
+            event_certainty=ctx.event_certainty,
+            analysis_confidence=macro_confidence,
+        )
     except Exception as exc:
         logger.warning("macro_context_node: LLM call failed: %s — using fallback", exc)
         ctx = MacroEventContext(
@@ -206,6 +237,8 @@ def macro_context_node(state: DynamicAgentState) -> DynamicAgentState:
             primary_commodity_shock=None,
             impact_vectors=impact_vectors,
             monetary_policy_signal=None,
+            event_certainty="unknown",
+            analysis_confidence=macro_confidence,
         )
 
     logger.info(
