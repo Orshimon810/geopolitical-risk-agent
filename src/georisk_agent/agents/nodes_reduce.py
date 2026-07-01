@@ -121,6 +121,7 @@ def reduce_ticker_results_node(state: DynamicAgentState) -> DynamicAgentState:
             portfolio_impacts=ordered,
             query=query,
             investor_takeaway=investor_takeaway,
+            macro_confidence=state.get("confidence", "Medium"),
         )
         logger.info(
             "reduce_ticker_results_node: portfolio_net=%s (B=%d / Br=%d / N=%d)",

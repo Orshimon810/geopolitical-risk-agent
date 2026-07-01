@@ -123,6 +123,19 @@ CRITICAL — proximity ≠ exposure:
     copper-mining dispute does NOT disrupt its operations — only its fuel
     costs matter, so the channel is commodity-price (jet fuel proxy).
 
+=== SUPPLY-CHAIN DEPTH DISCIPLINE (applies to all exposure_channel assignments) ===
+"supply-chain-input" requires the commodity to be a PRIMARY or CRITICAL input:
+  PRIMARY: represents >10% of COGS or operating costs for this specific firm.
+  CRITICAL: no readily available substitute at current price differentials.
+Do NOT assign "supply-chain-input" for:
+  - Trace or indirect ingredients (e.g., wheat → corn syrup → Coca-Cola: wheat is not
+    Coca-Cola's direct input — corn syrup is, and even that is a small COGS fraction).
+  - Commodities several supply-chain steps removed from this firm's direct operations.
+  - Inputs easily substituted within 90 days at modest cost premium.
+Use "macro-risk-sentiment" when the commodity connection is indirect or marginal.
+A long causal chain (A → B → C → this firm) does NOT qualify as supply-chain-input
+unless the firm directly purchases the commodity at stage 1 or 2 of the chain.
+
 === RULE 4: MONETARY POLICY / DISCOUNT-RATE LOGIC ===
 When monetary_policy_signal indicates a HAWKISH shift (surprise rate hike,
 tighter guidance, quantitative tightening):
@@ -148,6 +161,50 @@ sanctions driving dollar demand):
   even when exposure_channel is "macro-risk-sentiment".
 - EM-revenue firms see USD headwind on translated earnings → slightly
   Bearish bias for the long-term analysis.
+
+=== RULE 6: MACRO CONFIDENCE CEILING ===
+When the macro analysis confidence shown in MACRO EVENT CONTEXT is "Low":
+  Your risk_score MUST NOT be "High". A Low-confidence event carries fundamental uncertainty
+  about whether, when, or to what magnitude it will materialize — this uncertainty propagates
+  to all stock-level conclusions. Maximum allowed risk_score when macro confidence = "Low": "Medium".
+  Write "risk_score=Medium" even if you believe the directional signal is clear — the issue
+  is confidence in the event itself, not in the causal mechanism once it happens.
+
+=== RULE 7: EVENT CERTAINTY GATING ===
+When event_certainty (shown in MACRO EVENT CONTEXT) is "alleged" or "speculative":
+  - Frame ALL analysis as CONDITIONAL: use "IF this materialises...", "should this be
+    confirmed...", "conditional on the event occurring..." — never assert outcomes as certain.
+  - risk_score MUST NOT be "High". Unconfirmed events cannot support high-conviction assessments.
+  - Maximum allowed risk_score for alleged/speculative events: "Medium".
+When event_certainty is "unknown": apply the same caution as "speculative".
+Only "confirmed" events permit unconditional directional language and High risk_score.
+
+=== RULE 8: SECTOR-SPECIFIC VALUE-CHAIN CLASSIFICATION ===
+Several sectors generate systematic misclassification errors. Apply these rules precisely:
+
+FABLESS CHIP DESIGNERS (NVIDIA, AMD, Qualcomm, MediaTek, ARM, Marvell):
+  - These firms DESIGN chips but do NOT manufacture silicon.
+    Fabrication is outsourced to foundries (TSMC, Samsung, GlobalFoundries).
+  - economic_role: Consumer (they BUY foundry capacity — they are the foundry's customer).
+  - In a chip supply shock or export control event: face SUPPLY CONSTRAINTS and potential
+    cost increases — analyze the demand/supply balance they face, not as a silicon producer.
+  ❌ Do NOT classify as Producer because they operate in the chip sector.
+
+SEMICONDUCTOR EQUIPMENT MAKERS (ASML, Applied Materials, Lam Research, KLA, Tokyo Electron):
+  - These firms supply manufacturing TOOLS and chemicals to chip fabs.
+    They are upstream of chip production, not chip producers.
+  - economic_role: Producer (sells capital equipment to the semiconductor production ecosystem).
+  - In fab expansions or capacity build-outs: equipment demand RISES → Bullish.
+  - In fab shutdowns, export control restrictions, or customer sanctions: equipment orders
+    FALL (customers cannot buy their machines) → Bearish.
+  ❌ Do NOT treat as a chip producer or chip consumer — they make machines, not chips.
+
+GOVERNMENT CONTRACTORS (Lockheed Martin, Raytheon, Northrop Grumman, BAE Systems, L3Harris):
+  - These firms SELL weapons systems, missiles, and defense services TO governments.
+  - economic_role: Producer/seller. They BENEFIT from increased defense budgets.
+  - Rising NATO spending targets, emergency defense appropriations → revenue upside → Bullish.
+  ❌ Do NOT classify as Consumer because they work in the defense sector.
+    They are the sellers, not the buyers, of defense capability.
 
 === SPECIAL ASSET CLASSES ===
 VIX / Volatility instruments (ticker patterns: ^VIX, VIX, UVXY, VXX):
@@ -297,6 +354,24 @@ def ticker_analyst_node(state: TickerWorkerInput) -> dict[str, Any]:
 
     logger.info("ticker_analyst_node: analysing %s (%s)", ticker, name)
 
+    # Issue 10: guard against hallucinated enrichment for unrecognized tickers.
+    # The enrichment LLM sets headquarters_country='UNRECOGNIZED_TICKER' when it
+    # doesn't recognize the ticker as a real publicly-traded security.
+    if enriched_holding.get("headquarters_country") == "UNRECOGNIZED_TICKER":
+        logger.warning(
+            "ticker_analyst_node: %s is UNRECOGNIZED_TICKER — returning placeholder "
+            "to prevent hallucinated analysis",
+            ticker,
+        )
+        return {"ticker_analyses": [_placeholder_entry(
+            ticker=ticker,
+            name=name,
+            reason=(
+                "Ticker not recognized as a real publicly-traded security. "
+                "Analysis skipped to prevent hallucinated company description."
+            ),
+        )]}
+
     # Build the per-ticker user message
     footprint_str = (
         ", ".join(enriched_holding.get("geographic_asset_footprint") or [])
@@ -315,12 +390,19 @@ def ticker_analyst_node(state: TickerWorkerInput) -> dict[str, Any]:
         if investor_takeaway else "  (none)"
     )
 
+    event_certainty    = macro_context.get("event_certainty", "unknown")
+    analysis_confidence = macro_context.get("analysis_confidence", "Medium")
+
     user_message = (
         f"=== MACRO EVENT CONTEXT ===\n"
         f"Event summary: {macro_context.get('event_summary', query)}\n"
         f"Directly affected geographies: {geographies_str}\n"
         f"Primary commodity shock: {macro_context.get('primary_commodity_shock') or 'none'}\n"
-        f"Monetary policy signal: {macro_context.get('monetary_policy_signal') or 'none'}\n\n"
+        f"Monetary policy signal: {macro_context.get('monetary_policy_signal') or 'none'}\n"
+        f"Event certainty: {event_certainty}  "
+        f"[RULE 7: if 'alleged' or 'speculative', all analysis MUST be conditional; risk_score ≤ Medium]\n"
+        f"Macro analysis confidence: {analysis_confidence}  "
+        f"[RULE 6: if 'Low', risk_score MUST NOT be 'High']\n\n"
         f"Impact vectors:\n{vectors_str}\n\n"
         f"=== HOLDING TO ANALYSE ===\n"
         f"Ticker: {ticker}\n"

@@ -13,6 +13,7 @@ Routing signal written to state["reviewer_verdict"]:
 """
 
 import logging
+import re
 from typing import List, Literal
 
 from langchain_openai import ChatOpenAI
@@ -25,15 +26,28 @@ logger = logging.getLogger(__name__)
 
 MAX_RETRIES_DEFAULT = 1
 
+# Issue 1: detect queries that reference a vague/unnamed actor, which limits
+# how confident any analysis can be regardless of evidence quality.
+_VAGUE_ACTOR_RE = re.compile(
+    r'\b(a\s+(?:small|large|major|unnamed|unknown|unspecified|certain|particular)\s+'
+    r'(?:country|nation|state|player|actor|government))'
+    r'|\bsome\s+(?:country|nation|state)\b'
+    r'|\ban?\s+unspecified\s+(?:country|nation|actor|player)\b'
+    r'|\ban?\s+unnamed\s+(?:country|nation|actor|player)\b',
+    re.IGNORECASE,
+)
+
 
 def _calibrate_confidence(
     confidence: str,
     sq: dict,
     plan: list,
+    query: str = "",
 ) -> tuple[str, str]:
     """
     Deterministically override the analysis LLM's self-reported confidence
-    when source_quality metrics don't support it.
+    when source_quality metrics don't support it, or when the query is
+    under-specified (Issue 1) or uses hedging language.
     Returns (calibrated_confidence, reason_string).
     Only downgrades — never upgrades.
     """
@@ -41,6 +55,15 @@ def _calibrate_confidence(
     answered      = sq.get("sub_questions_answered", 0)
     n_questions   = len(plan)
     avg_distance  = sq.get("avg_cosine_distance", 0.0)
+
+    # Issue 1: under-specification guard — vague actor/geography in the query
+    # prevents High confidence regardless of evidence quality.
+    if query and confidence == "High" and _VAGUE_ACTOR_RE.search(query):
+        return (
+            "Medium",
+            "High→Medium: query references a generic unnamed actor/geography — "
+            "event parameters under-specified, directional forecasts cannot be High confidence",
+        )
 
     if confidence == "High":
         if total_chunks < 5:
@@ -181,7 +204,7 @@ def reviewer_node(state: DynamicAgentState) -> DynamicAgentState:
         }
         review_log.append(entry)
 
-        calibrated, cal_reason = _calibrate_confidence(confidence, sq, plan)
+        calibrated, cal_reason = _calibrate_confidence(confidence, sq, plan, state.get("query", ""))
         if cal_reason:
             logger.info("Confidence calibrated: %s (was %s)", calibrated, confidence)
 
