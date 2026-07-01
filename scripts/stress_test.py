@@ -32,9 +32,22 @@ sys.path.insert(0, str(_ROOT / "src"))
 
 from georisk_agent.agents.graph import build_legacy_graph  # noqa: E402
 
+# Fields kept in the output — everything else is pipeline internals
+_OUTPUT_FIELDS = {
+    "market_impacts",
+    "risks",
+    "scenarios",
+    "investor_takeaway",
+    "confidence",
+    "sources",
+    "signals",
+    "portfolio_impacts",
+    "portfolio_net",
+}
+
 
 def _run_case(app, case: dict) -> dict:
-    case_id  = case.get("id") or case["query"][:50]
+    case_id   = case.get("id") or case["query"][:50]
     portfolio = case.get("portfolio")
 
     print(f"  Running: {case_id!r}...")
@@ -44,16 +57,17 @@ def _run_case(app, case: dict) -> dict:
     if portfolio:
         initial["portfolio"] = portfolio
 
-    result  = app.invoke(initial)
+    raw     = app.invoke(initial)
     elapsed = round(time.perf_counter() - t0, 1)
     print(f"  Done in {elapsed}s")
 
+    output = {k: v for k, v in raw.items() if k in _OUTPUT_FIELDS and v is not None}
+
     return {
-        "id":      case_id,
-        "query":   case["query"],
-        "focus":   case.get("focus", ""),
+        "id":        case_id,
+        "query":     case["query"],
         "elapsed_s": elapsed,
-        "output":  result,
+        "output":    output,
     }
 
 
@@ -61,6 +75,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run queries through the pipeline and dump JSON")
     parser.add_argument("cases_file", nargs="?", default="stress_tests/cases.yaml")
     parser.add_argument("--query",  help="Single inline query")
+    parser.add_argument("--id",     help="Run only the case with this id")
     parser.add_argument("--output", help="Output file path (default: stress_tests/results/run_<timestamp>.json)")
     args = parser.parse_args()
 
@@ -75,6 +90,11 @@ def main() -> None:
         with open(path) as f:
             raw = yaml.safe_load(f) if path.suffix in (".yaml", ".yml") else json.load(f)
         cases = raw if isinstance(raw, list) else raw.get("cases", [])
+        if args.id:
+            cases = [c for c in cases if c.get("id") == args.id]
+            if not cases:
+                print(f"No case found with id={args.id!r}", file=sys.stderr)
+                sys.exit(1)
         print(f"Loaded {len(cases)} case(s) from {path}")
 
     print("Building agent graph...")
