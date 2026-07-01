@@ -44,4 +44,62 @@ BENCHMARK_QUERIES = [
         "focus": "false_premise_detection"
     },
 
+    # -----------------------------
+    # P0/P1 fix regression tests
+    # -----------------------------
+
+    # Test 9: speculative event — Fix 2 (hedge block injection)
+    # Base case must NOT assume the event has already happened.
+    {
+        "query": (
+            "Unconfirmed reports suggest Iran may be planning to blockade the Strait of Hormuz. "
+            "If these reports are accurate, how would this affect energy markets and oil-exposed equities?"
+        ),
+        "focus": "event_certainty_speculative",
+    },
+
+    # Test 10: vague actor — Fix 2 (vague actor hedge block)
+    # Scenarios must acknowledge missing actor/geography and avoid precise numeric forecasts.
+    {
+        "query": (
+            "A large unnamed commodity-producing country has just announced sweeping export "
+            "restrictions on critical minerals. What are the global market implications?"
+        ),
+        "focus": "event_certainty_vague_actor",
+    },
+
+    # Test 11: alleged positive event with semiconductor portfolio — Fixes 1, 2, 3
+    # Alleged certainty must produce conditional framing; portfolio_net must reflect
+    # post-validation verdicts; validator must see full 300-char prose.
+    {
+        "query": (
+            "Reports suggest the US and China may be nearing a deal to ease semiconductor "
+            "export restrictions. How would this affect semiconductor-heavy portfolios?"
+        ),
+        "focus": "event_certainty_alleged_positive",
+        "portfolio": [
+            {"ticker": "NVDA", "name": "NVIDIA Corporation",                   "asset_type": "stock"},
+            {"ticker": "ASML", "name": "ASML Holding NV",                       "asset_type": "stock"},
+            {"ticker": "TSM",  "name": "Taiwan Semiconductor Manufacturing",    "asset_type": "stock"},
+            {"ticker": "AAPL", "name": "Apple Inc.",                            "asset_type": "stock"},
+        ],
+    },
+
+    # Test 12: confirmed Taiwan disruption with semiconductor portfolio — Fixes 1, 3
+    # Confirmed event (no hedge block); tests portfolio_net correctness and full-prose validation.
+    {
+        "query": (
+            "China has announced military exercises near Taiwan that are disrupting TSMC's "
+            "logistics and supply chains. What is the impact on semiconductor stocks?"
+        ),
+        "focus": "transmission_mechanisms_semiconductor",
+        "portfolio": [
+            {"ticker": "NVDA", "name": "NVIDIA Corporation",                   "asset_type": "stock"},
+            {"ticker": "ASML", "name": "ASML Holding NV",                       "asset_type": "stock"},
+            {"ticker": "TSM",  "name": "Taiwan Semiconductor Manufacturing",    "asset_type": "stock"},
+            {"ticker": "AAPL", "name": "Apple Inc.",                            "asset_type": "stock"},
+            {"ticker": "LMT",  "name": "Lockheed Martin Corporation",           "asset_type": "stock"},
+        ],
+    },
+
 ]

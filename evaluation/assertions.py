@@ -103,10 +103,10 @@ def assert_source_count_in_range(response: Dict[str, Any]) -> AssertionResult:
     sources: list = response.get("sources") or []
     n = len(sources)
     if n < 3:
-        return False, f"Only {n} sources — evidence is too thin (expected ≥3)"
+        return False, f"Only {n} sources -- evidence is too thin (expected >=3)"
     if n > 25:
         return False, f"{n} sources — abnormally high, possible noise injection"
-    return True, f"{n} sources (within healthy 3–25 range)"
+    return True, f"{n} sources (within healthy 3-25 range)"
 
 
 # ---------------------------------------------------------------------------
@@ -139,6 +139,11 @@ def assert_portfolio_net_synthesis(response: Dict[str, Any]) -> AssertionResult:
 
 def assert_polarity_conflicts_logged(response: Dict[str, Any]) -> AssertionResult:
     """H-F: scenario_polarity_conflicts key present in debug.consistency_check."""
+    # Polarity conflict detection only runs when a portfolio is present; the
+    # consistency validator returns early (no debug key) for non-portfolio queries.
+    if not response.get("portfolio"):
+        return True, "No portfolio in query -- polarity conflict check not applicable"
+
     debug = response.get("debug") or {}
     consistency = debug.get("consistency_check") or {}
 
@@ -220,30 +225,31 @@ def _extract_all_text(response: Dict[str, Any]) -> str:
 
 # All assertions that apply universally (not query-focus-specific)
 UNIVERSAL_ASSERTIONS: list[tuple[str, Any]] = [
-    ("C1 — No social sources",         assert_no_social_sources),
-    ("H-A — Readable source titles",   assert_readable_source_titles),
-    ("H-D — Sufficient sources",        assert_source_count_in_range),
-    ("H-F — Polarity conflicts logged", assert_polarity_conflicts_logged),
-    ("C2 — Ambiguity gate",            assert_clarification_gate_works),
+    ("C1 -- No social sources",         assert_no_social_sources),
+    ("H-A -- Readable source titles",   assert_readable_source_titles),
+    ("H-D -- Sufficient sources",        assert_source_count_in_range),
+    ("H-E -- Portfolio net synthesis",   assert_portfolio_net_synthesis),
+    ("H-F -- Polarity conflicts logged", assert_polarity_conflicts_logged),
+    ("C2 -- Ambiguity gate",            assert_clarification_gate_works),
 ]
 
 # Assertions keyed by benchmark query focus tag
 FOCUS_ASSERTIONS: dict[str, list[tuple[str, Any]]] = {
     "transmission_mechanisms": [
-        ("M-C — Chokepoint mentioned", assert_chokepoint_mentioned),
+        ("M-C -- Chokepoint mentioned", assert_chokepoint_mentioned),
     ],
     "scenario_generation": [
-        ("M-A — Price anchors in scenarios", assert_scenario_price_present),
+        ("M-A -- Price anchors in scenarios", assert_scenario_price_present),
     ],
     "second_order_reasoning": [
-        ("M-C — Second-order effects", assert_second_order_effects_present),
-        ("M-A — Price anchors in scenarios", assert_scenario_price_present),
+        ("M-C -- Second-order effects", assert_second_order_effects_present),
+        ("M-A -- Price anchors in scenarios", assert_scenario_price_present),
     ],
     "false_premise_detection": [
         ("False premise rejected", assert_false_premise_rejected),
     ],
     "signals": [
-        ("H-D — Web sources retrieved", assert_web_sources_retrieved),
+        ("H-D -- Web sources retrieved", assert_web_sources_retrieved),
     ],
 }
 

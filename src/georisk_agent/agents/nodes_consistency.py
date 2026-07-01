@@ -100,9 +100,9 @@ def consistency_validator_node(state: DynamicAgentState) -> DynamicAgentState:
     holdings_block = "\n".join(
         f"  • {p.get('ticker', '?')} ({p.get('name', '')}): "
         f"verdict={_verdict(p)} | "
-        f"short_term=[{(p.get('short_term_analysis') or p.get('short_term_impact', ''))[:100]}] | "
-        f"long_term=[{(p.get('long_term_analysis') or p.get('long_term_impact', ''))[:100]}] | "
-        f"reasoning=[{_reasoning(p)[:100]}]"
+        f"short_term=[{(p.get('short_term_analysis') or p.get('short_term_impact', ''))[:300]}] | "
+        f"long_term=[{(p.get('long_term_analysis') or p.get('long_term_impact', ''))[:300]}] | "
+        f"reasoning=[{_reasoning(p)[:300]}]"
         for p in portfolio_impacts
     )
     takeaway_block = "\n".join(f"  - {t}" for t in investor_takeaway)
@@ -231,9 +231,28 @@ def consistency_validator_node(state: DynamicAgentState) -> DynamicAgentState:
             len(post_rule_results), [r["description"] for r in post_rule_results],
         )
 
+    # Recompute portfolio_net from the final post-validation verdicts so that
+    # bull_count/bear_count/net_verdict reflect the corrected holdings, not the
+    # pre-validation snapshot that reduce_ticker_results_node computed earlier.
+    from georisk_agent.agents.nodes_analysis import _run_portfolio_net_synthesis
+    portfolio_net = _run_portfolio_net_synthesis(
+        portfolio_impacts=corrected_impacts,
+        query=state.get("query", ""),
+        investor_takeaway=state.get("investor_takeaway") or [],
+        macro_confidence=state.get("confidence", "Medium"),
+    )
+    logger.info(
+        "consistency_validator: recomputed portfolio_net=%s (B=%d / Br=%d / N=%d)",
+        portfolio_net.get("net_verdict"),
+        portfolio_net.get("bull_count", 0),
+        portfolio_net.get("bear_count", 0),
+        portfolio_net.get("neutral_count", 0),
+    )
+
     return {
         **state,
         "portfolio_impacts": corrected_impacts,
+        "portfolio_net":     portfolio_net,
         "debug": {
             **(state.get("debug") or {}),
             "consistency_check": {
