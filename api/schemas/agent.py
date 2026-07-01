@@ -71,7 +71,7 @@ class HistoryItemResponse(BaseModel):
 
     id: str
     query: str
-    confidence: Literal["Low", "Medium", "High"]
+    confidence: Literal["Low", "Medium", "High", "insufficient_data"]
     created_at: str
     market_impacts: list[str]
     result: dict[str, Any] | None = None

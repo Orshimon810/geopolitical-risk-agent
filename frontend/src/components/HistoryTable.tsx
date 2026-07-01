@@ -13,7 +13,14 @@ const PAGE_SIZE = 8;
 type Filter = "all" | Confidence;
 
 function confidenceVariant(c: Confidence) {
-  return c === "High" ? "high" : c === "Medium" ? "medium" : "low";
+  if (c === "High") return "high";
+  if (c === "Medium") return "medium";
+  if (c === "Low") return "low";
+  return "outline";
+}
+
+function confidenceLabel(c: Confidence) {
+  return c === "insufficient_data" ? "No Data" : c;
 }
 
 interface HistoryTableProps {
@@ -47,7 +54,7 @@ export function HistoryTable({ items, onViewReport, onDelete }: HistoryTableProp
       {/* Filters */}
       <div className="flex items-center gap-2">
         <span className="text-xs text-slate-500">Filter:</span>
-        {(["all", "High", "Medium", "Low"] as const).map((f) => (
+        {(["all", "High", "Medium", "Low", "insufficient_data"] as const).map((f) => (
           <button
             key={f}
             onClick={() => { setFilter(f); setPage(0); }}
@@ -57,7 +64,7 @@ export function HistoryTable({ items, onViewReport, onDelete }: HistoryTableProp
                 : "border border-slate-700 text-slate-400 hover:border-slate-600 hover:text-slate-200"
             }`}
           >
-            {f === "all" ? "All" : f}
+            {f === "all" ? "All" : f === "insufficient_data" ? "No Data" : f}
           </button>
         ))}
         <span className="ml-auto text-xs text-slate-600">{filtered.length} records</span>
@@ -93,7 +100,7 @@ export function HistoryTable({ items, onViewReport, onDelete }: HistoryTableProp
                   </TableCell>
                   <TableCell>
                     <Badge variant={confidenceVariant(item.confidence)}>
-                      {item.confidence}
+                      {confidenceLabel(item.confidence)}
                     </Badge>
                   </TableCell>
                   <TableCell>

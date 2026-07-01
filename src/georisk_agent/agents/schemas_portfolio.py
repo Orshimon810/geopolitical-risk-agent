@@ -114,7 +114,7 @@ class MacroEventContext(BaseModel):
             "'unknown' = certainty not determinable from available information."
         ),
     )
-    analysis_confidence: Literal["Low", "Medium", "High"] = Field(
+    analysis_confidence: Literal["Low", "Medium", "High", "insufficient_data"] = Field(
         default="Medium",
         description=(
             "Macro-level analysis confidence propagated from the analysis node. "
