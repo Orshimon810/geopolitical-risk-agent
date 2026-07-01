@@ -190,6 +190,16 @@ FABLESS CHIP DESIGNERS (NVIDIA, AMD, Qualcomm, MediaTek, ARM, Marvell):
     cost increases — analyze the demand/supply balance they face, not as a silicon producer.
   ❌ Do NOT classify as Producer because they operate in the chip sector.
 
+  NVIDIA-SPECIFIC FACTS (apply to NVDA/NVIDIA regardless of event type):
+  · NVDA is an AI accelerator and GPU designer, NOT a generic "chip consumer."
+  · Primary exposure vectors: (1) US export controls on H100/H800/B200 to China;
+    (2) China data-center demand — was ~20-25% of data center revenue pre-ban;
+    (3) TSMC CoWoS advanced packaging dependency — constrained SEPARATELY from
+    standard logic wafer capacity and cannot be quickly substituted;
+    (4) hyperscaler capex cycles (Azure/AWS/Google spending timing).
+  · For export-control easing: name these specific mechanisms, not generic "chip demand."
+  · ❌ Do NOT describe NVDA as a "generic consumer of semiconductors."
+
 SEMICONDUCTOR EQUIPMENT MAKERS (ASML, Applied Materials, Lam Research, KLA, Tokyo Electron):
   - These firms supply manufacturing TOOLS and chemicals to chip fabs.
     They are upstream of chip production, not chip producers.
@@ -199,12 +209,40 @@ SEMICONDUCTOR EQUIPMENT MAKERS (ASML, Applied Materials, Lam Research, KLA, Toky
     FALL (customers cannot buy their machines) → Bearish.
   ❌ Do NOT treat as a chip producer or chip consumer — they make machines, not chips.
 
+  ASML-SPECIFIC EXPOSURE MECHANISM (apply to ASML regardless of event type):
+  · ASML's revenue pathway: geopolitical event → customer capex budget / export-control rules
+    → ASML order backlog changes → ASML revenue.
+  · In causal_reasoning, ALWAYS reference: order backlog, customer capex visibility,
+    and/or export-control restrictions on machine sales.
+  · ❌ Do NOT describe ASML's exposure as "chip production" or "wafer output" —
+    ASML does not produce chips; they sell EUV lithography machines.
+
+FOUNDRIES / CONTRACT MANUFACTURERS (TSMC, Samsung Foundry, GlobalFoundries, SMIC):
+  - These firms manufacture chips for fabless designers.
+  - economic_role: Producer (sells wafer capacity / foundry services).
+  - CRITICAL TIMING CONSTRAINT FOR TSMC (TSM): Physical fab capacity ramp takes
+    18-36 months. Within a 3-12 month scenario window, geopolitical improvements
+    can deliver: ORDER VISIBILITY (YES), CUSTOMER CONFIDENCE (YES),
+    RISK PREMIUM REDUCTION (YES), but NOT ADDITIONAL WAFER OUTPUT (NO).
+  - ❌ Do NOT describe TSM as benefiting from "near-term production capacity increases,"
+    "output ramps," or "physical capacity expansion" within a 3-12 month window —
+    only visibility, sentiment, and order-book improvements are near-term.
+
 GOVERNMENT CONTRACTORS (Lockheed Martin, Raytheon, Northrop Grumman, BAE Systems, L3Harris):
   - These firms SELL weapons systems, missiles, and defense services TO governments.
   - economic_role: Producer/seller. They BENEFIT from increased defense budgets.
   - Rising NATO spending targets, emergency defense appropriations → revenue upside → Bullish.
   ❌ Do NOT classify as Consumer because they work in the defense sector.
     They are the sellers, not the buyers, of defense capability.
+
+  DIRECTION-CONDITIONAL LOGIC FOR DEFENSE CONTRACTORS:
+  · CONFLICT / ESCALATION events: higher defense budgets, emergency procurement → Bullish.
+  · POSITIVE / DE-ESCALATION events (trade deals, cooperation, reduced tension):
+    → Primary effect: reduced geopolitical risk premium → sentiment lift (mild positive).
+    → Secondary effect: reduced procurement urgency, possible future budget headwinds.
+    → NET: Neutral to mildly positive. Do NOT assume Bullish just because they sell defense.
+  · Semiconductor supply benefit for defense systems requires 3-5 year procurement cycles
+    → ❌ Do NOT assign near-term semiconductor tailwind to LMT/RTX/NOC in 3-12 month window.
 
 === SPECIAL ASSET CLASSES ===
 VIX / Volatility instruments (ticker patterns: ^VIX, VIX, UVXY, VXX):
@@ -225,14 +263,28 @@ Broad equity indices (^DJI, ^GSPC, ^SPX, ^IXIC, ^RUT, SPY, QQQ, IWM, DIA):
   of equal and offsetting magnitude.
 
 === NEUTRAL DISCIPLINE ===
-Neutral is valid ONLY when the holding has NO exposure to ANY impact vector
-AND no competing vectors to weigh. If Neutral, state explicitly which vectors
-the holding misses: "Neutral — no exposure to [Vector A], [Vector B], or
-[Vector C]; core business is [X], structurally isolated from this event."
+Neutral is valid in exactly TWO cases:
 
-Do NOT use Neutral to avoid choosing between two opposing vectors. Weigh
-which vector has greater magnitude for this specific holding, choose the
-stronger one, and acknowledge the opposing vector in causal_reasoning.
+CASE 1 — NO EXPOSURE: the holding has no meaningful connection to any impact
+vector. State explicitly: "Neutral — no exposure to [Vector A], [Vector B];
+core business is [X], structurally isolated from this event."
+
+CASE 2 — GENUINELY BALANCED OPPOSING VECTORS: the holding is exposed to two
+impact vectors that point in opposite directions AND have comparable magnitude
+for this specific firm, such that neither clearly dominates.
+Requirements for Case 2 (all three MUST be met):
+  (a) causal_reasoning MUST name BOTH opposing vectors explicitly by label.
+  (b) causal_reasoning MUST explain WHY the magnitudes are comparable — cite
+      revenue split, geographic overlap, or structural offset (e.g., "BMW
+      derives ~30% revenue from China and ~25% from EU domestic market — the
+      tariff protection benefit and the China retaliation risk are roughly equal
+      in magnitude, yielding no clear net direction pending retaliation scope").
+  (c) The explanation must be company-specific, not generic ("macro uncertainty
+      balances forces" is NOT an acceptable Case 2 justification).
+
+Do NOT use Neutral to avoid analysis when one vector clearly dominates.
+If vectors are present but directionally unequal (e.g. 70% vs 30% exposure),
+choose Bullish or Bearish and acknowledge the minority vector in causal_reasoning.
 
 === COMPETING VECTORS ===
 When the holding is exposed to MULTIPLE vectors pointing in opposite
@@ -271,6 +323,51 @@ and zero or only 1 Bullish phrase, a Bullish or Neutral verdict is likely a
 contradiction — reconsider and assign Bearish unless a specific OFFSET or HEDGE
 justifies the divergence. Likewise, if Bullish phrases dominate and you wrote Neutral,
 upgrade to Bullish. This is your responsibility during generation.
+
+=== RULE 9: RISK SCORE DISCIPLINE BY EXPOSURE CHANNEL AND MATERIALITY ===
+Your risk_score MUST reflect the STRENGTH of the exposure pathway, not just
+the magnitude of the macro event itself:
+
+exposure_channel = "none":
+  risk_score MUST be "Low". Zero exposure = zero conviction.
+
+exposure_channel = "macro-risk-sentiment":
+  risk_score MUST be "Low" UNLESS you name a CONCRETE, company-specific
+  transmission mechanism in causal_reasoning (not generic "macro uncertainty"
+  or "risk-off sentiment affects all equities").
+  ACCEPTABLE Medium example: "JPM's energy-sector loan book represents ~12%
+  of total credit exposure — an oil price shock creates measurable credit-risk
+  transmission to JPM earnings."
+  NOT ACCEPTABLE: "General risk-off sentiment will weigh on JPM stock."
+
+Event materiality ceiling (shown in MACRO EVENT CONTEXT as event_materiality):
+  When event_materiality = "low":
+    - Holdings with exposure_channel "none" or "macro-risk-sentiment" MUST have
+      risk_score = "Low". A niche bilateral trade dispute cannot justify medium
+      or high conviction for unrelated or indirectly exposed equities.
+    - Direct operational exposures (direct-operational, supply-chain-input,
+      commodity-price) may still use Medium if the mechanism is specific.
+
+=== NUMERIC PRECISION (NON-NEGOTIABLE) ===
+Precise numbers in causal_reasoning, short_term_analysis, and long_term_analysis
+are ONLY permitted when grounded in one of:
+  (a) a live market price explicitly shown in the MACRO EVENT CONTEXT signals feed,
+  (b) an explicit benchmark stated in the event summary (e.g. "Brent at $110/bbl"),
+  (c) a named historical precedent ("2022 Brent spike averaged +22% over 6 weeks").
+
+If none of the above apply, use QUALITATIVE wording:
+  "significantly higher" instead of "+12-18%"
+  "materially compressed margins" instead of "15% EBITDA decline"
+  "elevated credit risk" instead of "30-40% probability of default"
+  "substantial demand impact" instead of "20-25% volume decline"
+
+STRICTLY FORBIDDEN without a cited anchor:
+  - Specific percentage ranges: "10-15%", "20-30%", "5-10% margin compression"
+  - Specific dollar targets: "$80-90 oil", "$150 price target"
+  - Unsupported time windows stated as fact: "within 6 months prices will rise X%"
+
+Violation: if you find yourself writing a numeric range without a cited source,
+replace it with a qualitative phrase and continue — do not fabricate a source.
 
 Return exactly one TickerHoldingAnalysis using the ticker and name
 provided verbatim in the enriched_holding payload.
@@ -390,8 +487,9 @@ def ticker_analyst_node(state: TickerWorkerInput) -> dict[str, Any]:
         if investor_takeaway else "  (none)"
     )
 
-    event_certainty    = macro_context.get("event_certainty", "unknown")
+    event_certainty     = macro_context.get("event_certainty", "unknown")
     analysis_confidence = macro_context.get("analysis_confidence", "Medium")
+    event_materiality   = macro_context.get("event_materiality", "moderate")
 
     user_message = (
         f"=== MACRO EVENT CONTEXT ===\n"
@@ -402,7 +500,9 @@ def ticker_analyst_node(state: TickerWorkerInput) -> dict[str, Any]:
         f"Event certainty: {event_certainty}  "
         f"[RULE 7: if 'alleged' or 'speculative', all analysis MUST be conditional; risk_score ≤ Medium]\n"
         f"Macro analysis confidence: {analysis_confidence}  "
-        f"[RULE 6: if 'Low', risk_score MUST NOT be 'High']\n\n"
+        f"[RULE 6: if 'Low', risk_score MUST NOT be 'High']\n"
+        f"Event materiality: {event_materiality}  "
+        f"[RULE 9: if 'low', holdings with 'none'/'macro-risk-sentiment' channel MUST have risk_score='Low']\n\n"
         f"Impact vectors:\n{vectors_str}\n\n"
         f"=== HOLDING TO ANALYSE ===\n"
         f"Ticker: {ticker}\n"

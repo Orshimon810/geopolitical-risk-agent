@@ -18,6 +18,7 @@ ticker_analyses accumulator, this node:
 """
 
 import logging
+import re
 from typing import Any, Optional
 
 from georisk_agent.app.types import DynamicAgentState
@@ -27,6 +28,111 @@ from georisk_agent.agents.verdict_rules import (
 )
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Deterministic risk-score calibration guard
+# Implements RULE 9: exposure channel and materiality cap risk_score.
+# ---------------------------------------------------------------------------
+
+_INDIRECT_CHANNELS = frozenset({"macro-risk-sentiment", "none"})
+
+# Numeric pattern detector — finds unsupported X-Y% ranges in prose.
+# Used to set data_gap=True and log a warning when the LLM emits hallucinated stats.
+_NUMERIC_RANGE_RE = re.compile(
+    r'\b\d+\s*[-–]\s*\d+\s*%'        # "10-15%" or "10–15%"
+    r'|\b\d+(?:\.\d+)?\s*%\s*(?:decline|compression|increase|rise|fall|drop|growth|impact)',
+    re.IGNORECASE,
+)
+
+
+def _apply_risk_score_caps(
+    impacts: list[dict[str, Any]],
+    event_materiality: str,
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """
+    Deterministically enforce RULE 9 risk_score caps.
+
+    Rules applied:
+      1. exposure_channel="none" → risk_score forced to "Low".
+      2. exposure_channel="macro-risk-sentiment" AND event_materiality="low"
+         → risk_score forced to "Low".
+      3. exposure_channel="macro-risk-sentiment" AND risk_score="High"
+         → risk_score downgraded to "Medium" (High requires a concrete mechanism,
+         which the LLM must name; the ticker analyst prompt now enforces this,
+         but we add a deterministic backstop).
+
+    Returns (corrected_impacts, log_messages).
+    """
+    corrected: list[dict[str, Any]] = []
+    log_messages: list[str] = []
+
+    for p in impacts:
+        p = dict(p)
+        channel    = (p.get("exposure_channel") or "none").lower()
+        risk_score = p.get("risk_score") or p.get("confidence", "Low")
+        ticker     = p.get("ticker", "?")
+
+        original_risk = risk_score
+
+        if channel == "none" and risk_score != "Low":
+            risk_score = "Low"
+            log_messages.append(
+                f"{ticker}: risk_score {original_risk}→Low "
+                f"(exposure_channel='none' — zero exposure cannot support medium/high conviction)"
+            )
+
+        elif channel == "macro-risk-sentiment":
+            if event_materiality == "low" and risk_score != "Low":
+                risk_score = "Low"
+                log_messages.append(
+                    f"{ticker}: risk_score {original_risk}→Low "
+                    f"(indirect exposure + low-materiality event)"
+                )
+            elif risk_score == "High":
+                risk_score = "Medium"
+                log_messages.append(
+                    f"{ticker}: risk_score High→Medium "
+                    f"(macro-risk-sentiment channel requires concrete mechanism for High)"
+                )
+
+        if risk_score != original_risk:
+            p["risk_score"]  = risk_score
+            p["confidence"]  = risk_score   # legacy alias
+
+        corrected.append(p)
+
+    return corrected, log_messages
+
+
+def _flag_numeric_precision_violations(
+    impacts: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """
+    Scan ticker analysis prose for unsupported numeric range patterns and flag them.
+
+    When an unsupported pattern is found:
+    - data_gap is NOT set here (it lives in DynamicAgentState, not per-ticker dicts);
+      the warning is surfaced in the reduce-node debug log and the overall data_gap
+      flag is left to the analysis_node's self-report.
+    - A log_message is returned so the caller can record it in debug state.
+
+    This is a detection-only pass — it does NOT modify the prose (the LLM is
+    responsible for using qualitative wording per RULE 9 NUMERIC PRECISION).
+    """
+    violations: list[str] = []
+    for p in impacts:
+        ticker = p.get("ticker", "?")
+        prose  = " ".join([
+            p.get("short_term_analysis", ""),
+            p.get("long_term_analysis", ""),
+            p.get("causal_reasoning", ""),
+        ])
+        matches = _NUMERIC_RANGE_RE.findall(prose)
+        if matches:
+            violations.append(
+                f"{ticker}: unsupported numeric pattern(s) detected: {matches[:3]}"
+            )
+    return impacts, violations
 
 
 def _placeholder_entry(ticker: str, name: str) -> dict[str, Any]:
@@ -55,10 +161,11 @@ def reduce_ticker_results_node(state: DynamicAgentState) -> DynamicAgentState:
     """
     Fan-in reducer: merge per-ticker results into portfolio_impacts.
     """
-    portfolio      = state.get("portfolio") or []
-    collected      = state.get("ticker_analyses") or []
+    portfolio         = state.get("portfolio") or []
+    collected         = state.get("ticker_analyses") or []
     investor_takeaway = state.get("investor_takeaway") or []
-    query          = state.get("query", "")
+    query             = state.get("query", "")
+    event_materiality = state.get("event_materiality", "moderate")
 
     logger.info(
         "reduce_ticker_results_node: received %d ticker result(s) for %d holding(s)",
@@ -112,6 +219,23 @@ def reduce_ticker_results_node(state: DynamicAgentState) -> DynamicAgentState:
 
     all_rule_results = enforce_log + align_log
 
+    # 3. Deterministic risk-score caps (RULE 9: channel + materiality ceiling)
+    ordered, risk_cap_log = _apply_risk_score_caps(ordered, event_materiality)
+    if risk_cap_log:
+        logger.info(
+            "reduce_ticker_results_node: risk_score caps applied: %s", risk_cap_log
+        )
+
+    # 4. Numeric precision violation detection (logging only — does not modify prose)
+    _, numeric_violations = _flag_numeric_precision_violations(ordered)
+    if numeric_violations:
+        logger.warning(
+            "reduce_ticker_results_node: numeric precision violations detected: %s",
+            numeric_violations,
+        )
+
+    all_rule_results = enforce_log + align_log
+
     # Portfolio net synthesis (imported lazily to avoid circular imports at module load)
     from georisk_agent.agents.nodes_analysis import _run_portfolio_net_synthesis
 
@@ -139,6 +263,8 @@ def reduce_ticker_results_node(state: DynamicAgentState) -> DynamicAgentState:
         "ticker_analyses":   [],
         "debug": {
             **(state.get("debug") or {}),
-            "rule_results": list(all_rule_results),
+            "rule_results":              list(all_rule_results),
+            "risk_cap_log":              risk_cap_log,
+            "numeric_precision_violations": numeric_violations,
         },
     }

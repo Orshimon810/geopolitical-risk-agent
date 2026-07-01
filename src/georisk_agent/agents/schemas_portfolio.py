@@ -123,6 +123,20 @@ class MacroEventContext(BaseModel):
             "no ticker worker should assign risk_score='High'."
         ),
     )
+    event_materiality: Literal["low", "moderate", "high"] = Field(
+        default="moderate",
+        description=(
+            "Scope and systemic importance of the triggering event. Set programmatically "
+            "by the analysis node — do not infer from context.\n"
+            "'high': major economies (US, China, EU, Russia) or critical infrastructure "
+            "(energy supply, SWIFT, semiconductor chokepoints) directly involved.\n"
+            "'low': niche commodity or bilateral dispute between small economies with "
+            "limited systemic reach (e.g. luxury wine tariff, minor bilateral trade spat).\n"
+            "'moderate': everything else.\n"
+            "Acts as a cap on risk_score for holdings with 'none' or 'macro-risk-sentiment' "
+            "exposure when materiality is 'low' — such holdings must receive risk_score='Low'."
+        ),
+    )
 
 
 class TickerHoldingAnalysis(BaseModel):
