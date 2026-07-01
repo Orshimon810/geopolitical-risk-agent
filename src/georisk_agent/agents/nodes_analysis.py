@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import List, Dict, Any, Literal
 
 from langchain_openai import ChatOpenAI
@@ -11,6 +12,77 @@ from georisk_agent.agents.verdict_rules import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Event certainty pre-classification (Issue 2)
+# Mirrors the keyword logic in macro_context_node's prompt but runs fast
+# (regex only) so analysis_node can inject a hedge block before generating
+# scenarios/market_impacts.  The authoritative LLM classification in
+# macro_context_node still runs afterwards and propagates to ticker workers.
+# ---------------------------------------------------------------------------
+
+_SPEC_RE = re.compile(
+    r'\b(may|could|might|reportedly|allegedly|alleged|speculated|speculative|'
+    r'unconfirmed|rumored|rumou?r|possible|potentially|'
+    r'sources?\s+(?:say|claim|suggest|indicate|report)|'
+    r'unconfirmed\s+reports?\s+suggest|if\s+true|if\s+confirmed)\b',
+    re.IGNORECASE,
+)
+_ALLEGE_RE = re.compile(
+    r'\b(reports?\s+suggest|according\s+to\s+(?:sources?|reports?)|'
+    r'sources?\s+familiar|people\s+familiar)\b',
+    re.IGNORECASE,
+)
+_VAGUE_ACTOR_ANALYSIS_RE = re.compile(
+    r'\ba\s+(?:small|large|major|unnamed|unknown|unspecified|certain|particular)\s+'
+    r'(?:country|nation|state|player|actor|government)\b'
+    r'|\bsome\s+(?:country|nation|state)\b',
+    re.IGNORECASE,
+)
+
+
+def _classify_query_certainty(query: str) -> tuple[str, str]:
+    """
+    Fast pre-classification of query certainty for analysis_node prompt injection.
+    Returns (event_certainty_label, hedge_block_text).
+    hedge_block_text is empty string for confirmed events.
+    """
+    if _SPEC_RE.search(query) or "unconfirmed report" in query.lower():
+        return "speculative", (
+            "\n=== EVENT CERTAINTY CONSTRAINT: SPECULATIVE (NON-NEGOTIABLE) ===\n"
+            "The query uses speculative language — this event is UNCONFIRMED.\n"
+            "MANDATORY for ALL output fields:\n"
+            "- market_impacts: use 'could', 'may', 'if confirmed' — never assertive present-tense projections.\n"
+            "- scenarios Base case: MUST begin with 'If [event] materializes:' or 'If confirmed:' — "
+            "do NOT assume the event has already happened.\n"
+            "- scenarios Escalation case: 'If confirmed AND conditions worsen:'\n"
+            "- investor_takeaway: MUST begin with 'If [event] is confirmed,' or "
+            "'In the event [event] materializes,'\n"
+            "Do NOT produce confident directional assertions for unconfirmed events.\n"
+        )
+    if _ALLEGE_RE.search(query):
+        return "alleged", (
+            "\n=== EVENT CERTAINTY CONSTRAINT: ALLEGED (NON-NEGOTIABLE) ===\n"
+            "The query cites unverified source reporting — this event is ALLEGED, not confirmed.\n"
+            "MANDATORY:\n"
+            "- market_impacts: use 'could', 'would if allegations are confirmed' language.\n"
+            "- scenarios Base case: begin with 'If allegations prove accurate:'\n"
+            "- investor_takeaway: begin with 'If reports are confirmed,'\n"
+        )
+    if _VAGUE_ACTOR_ANALYSIS_RE.search(query):
+        return "unknown", (
+            "\n=== EVENT CERTAINTY CONSTRAINT: VAGUE ACTOR (NON-NEGOTIABLE) ===\n"
+            "The query references an unnamed or unspecified actor. Missing event parameters "
+            "limit analytical precision.\n"
+            "MANDATORY:\n"
+            "- Acknowledge the unnamed actor/geography explicitly in market_impacts.\n"
+            "- Scenarios MUST note the actor has not been identified and project conditionally: "
+            "'Assuming a [small/mid-sized/major] open economy, IF this event materialises:'\n"
+            "- Avoid precise numeric forecasts; direction + mechanism + 'depending on actor size' "
+            "is the maximum allowable specificity.\n"
+        )
+    return "confirmed", ""
 
 
 # -------------------------
@@ -553,6 +625,16 @@ def analysis_node(state: DynamicAgentState) -> DynamicAgentState:
     # Domain checklist — inject must-consider chokepoints for detected topics
     domain_checklist_block = _build_domain_checklist_block(query, plan)
 
+    # Event certainty pre-classification — inject hedge constraints before
+    # the LLM generates scenarios/market_impacts so speculative/alleged/vague
+    # queries produce conditional framing rather than assertive base-case facts.
+    _event_certainty_label, hedge_block = _classify_query_certainty(query)
+    if _event_certainty_label != "confirmed":
+        logger.info(
+            "analysis_node: query pre-classified as %s — injecting hedge block",
+            _event_certainty_label,
+        )
+
     prompt = f"""
 You are a senior geopolitical risk analyst advising institutional investors.
 
@@ -572,7 +654,7 @@ Evidence:
 {signals_block}
 {benchmark_block}
 {live_anchor_block}
-{domain_checklist_block}
+{domain_checklist_block}{hedge_block}
 
 Structural rules:
 - Do NOT introduce risks inside market_impacts.
