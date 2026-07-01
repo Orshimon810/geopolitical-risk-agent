@@ -134,6 +134,11 @@ class DynamicAgentState(TypedDict, total=False):
     # Uses operator.add reducer so concurrent worker writes are safely concatenated.
     # reset to [] by reduce_ticker_results_node after each pass (prevents retry stacking).
 
+    # ── Evidence quality signal ───────────────────────────────────────
+    data_gap: bool
+    # True when analysis fell back to qualitative wording because numeric evidence
+    # (percentages, price targets, etc.) could not be grounded in retrieved sources.
+
     # ── Planner ambiguity gate (C2) ──────────────────────────────────
     is_answerable: bool
     # False when the planner detects the query is too vague or off-topic.

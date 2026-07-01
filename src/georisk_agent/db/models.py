@@ -134,7 +134,7 @@ class AnalysisHistory(Base):
     __tablename__ = "analysis_history"
     __table_args__ = (
         CheckConstraint(
-            "confidence IN ('Low', 'Medium', 'High')",
+            "confidence IN ('Low', 'Medium', 'High', 'insufficient_data')",
             name="chk_history_confidence",
         ),
         # Composite index: all reports for a user, newest first.
@@ -155,7 +155,7 @@ class AnalysisHistory(Base):
     # Full AnalysisOutput.model_dump() dict — includes market_impacts, risks,
     # scenarios, investor_takeaway, confidence, sources, reasoning.
     report: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    confidence: Mapped[str] = mapped_column(String(10), nullable=False)
+    confidence: Mapped[str] = mapped_column(String(20), nullable=False)
     model_name: Mapped[str | None] = mapped_column(Text, nullable=True)
     tokens_used: Mapped[int | None] = mapped_column(Integer, nullable=True)
     duration_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)

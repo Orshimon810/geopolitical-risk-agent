@@ -6,7 +6,7 @@ export interface User {
   is_active: boolean;
 }
 
-export type Confidence = "Low" | "Medium" | "High";
+export type Confidence = "Low" | "Medium" | "High" | "insufficient_data";
 export type TaskStatus = "PENDING" | "PROCESSING" | "WAITING_FOR_INPUT" | "SUCCESS" | "FAILED";
 
 export interface MarketDataEntry {

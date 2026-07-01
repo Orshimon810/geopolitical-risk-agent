@@ -56,6 +56,21 @@ def _calibrate_confidence(
     n_questions   = len(plan)
     avg_distance  = sq.get("avg_cosine_distance", 0.0)
 
+    # Tier 0: insufficient_data — worse than Low; no evidence to support any conclusion.
+    if total_chunks == 0:
+        return "insufficient_data", "→insufficient_data: zero chunks retrieved — no evidence basis"
+    if total_chunks == 1 and avg_distance > 0.65:
+        return (
+            "insufficient_data",
+            f"→insufficient_data: single chunk retrieved with very weak relevance "
+            f"(cosine distance {avg_distance:.2f})",
+        )
+    if n_questions > 0 and answered == 0 and total_chunks <= 1:
+        return (
+            "insufficient_data",
+            "→insufficient_data: no sub-questions answered and ≤1 chunk — evidence absent",
+        )
+
     # Issue 1: under-specification guard — vague actor/geography in the query
     # prevents High confidence regardless of evidence quality.
     if query and confidence == "High" and _VAGUE_ACTOR_RE.search(query):
@@ -65,7 +80,7 @@ def _calibrate_confidence(
             "event parameters under-specified, directional forecasts cannot be High confidence",
         )
 
-    if confidence == "High":
+    if confidence in ("High", "insufficient_data"):
         if total_chunks < 5:
             return "Medium", f"High→Medium: only {total_chunks} chunks retrieved (need ≥5)"
         if n_questions > 0 and answered < n_questions:
@@ -177,6 +192,10 @@ def reviewer_node(state: DynamicAgentState) -> DynamicAgentState:
         force_retry = True
         force_reason = "high_confidence_sparse: High confidence on fewer than 5 chunks"
 
+    if confidence == "insufficient_data" and retry_count == 0:
+        force_retry = True
+        force_reason = "insufficient_data: LLM self-reported insufficient evidence — attempt richer retrieval"
+
     if force_retry and retry_count < max_retries:
         logger.info(
             "Reviewer RETRY (deterministic) | cycle=%d | reason=%s",
@@ -255,7 +274,7 @@ def reviewer_node(state: DynamicAgentState) -> DynamicAgentState:
         and retry_count < max_retries
     )
 
-    calibrated, cal_reason = _calibrate_confidence(confidence, sq, plan)
+    calibrated, cal_reason = _calibrate_confidence(confidence, sq, plan, state.get("query", ""))
     if cal_reason:
         logger.info("Confidence calibrated: %s (was %s) — %s", calibrated, confidence, cal_reason)
 

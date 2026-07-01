@@ -233,16 +233,19 @@ function FeedbackFooter({ analysisId }: { analysisId?: string | null }) {
 
 /* ── Confidence meter — three ascending bars like signal strength ── */
 function ConfidenceMeter({ level }: { level: Confidence }) {
-  const rank: Record<Confidence, number> = { Low: 1, Medium: 2, High: 3 };
+  const isNoData = level === "insufficient_data";
+  const rank: Record<Confidence, number> = { Low: 1, Medium: 2, High: 3, insufficient_data: 0 };
   const colorClass: Record<Confidence, string> = {
-    Low:    "bg-rose-500",
-    Medium: "bg-amber-500",
-    High:   "bg-emerald-500",
+    Low:               "bg-rose-500",
+    Medium:            "bg-amber-500",
+    High:              "bg-emerald-500",
+    insufficient_data: "bg-slate-700",
   };
   const labelClass: Record<Confidence, string> = {
-    Low:    "text-rose-400",
-    Medium: "text-amber-400",
-    High:   "text-emerald-400",
+    Low:               "text-rose-400",
+    Medium:            "text-amber-400",
+    High:              "text-emerald-400",
+    insufficient_data: "text-slate-500",
   };
 
   return (
@@ -251,8 +254,8 @@ function ConfidenceMeter({ level }: { level: Confidence }) {
         CONFIDENCE
       </p>
       <div className="flex items-end justify-end gap-1 mb-1">
-        {(["Low", "Medium", "High"] as Confidence[]).map((l) => {
-          const filled = rank[level] >= rank[l];
+        {(["Low", "Medium", "High"] as const).map((l) => {
+          const filled = !isNoData && rank[level] >= rank[l];
           const heights = { Low: "h-2", Medium: "h-3.5", High: "h-5" };
           return (
             <div
@@ -265,7 +268,7 @@ function ConfidenceMeter({ level }: { level: Confidence }) {
         })}
       </div>
       <span className={`text-xs font-bold data-mono uppercase ${labelClass[level]}`}>
-        {level}
+        {isNoData ? "NO DATA" : level}
       </span>
     </div>
   );

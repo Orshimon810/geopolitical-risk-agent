@@ -205,5 +205,9 @@ FEATURE_*.txt
 SESSION_*.txt
 *.txt
 
+# Evaluation run outputs and scripts (not for version control)
+evaluation/results/
+evaluation/run_eval_100pt.py
+
 # MCP config (contains API keys)
 .mcp.json
