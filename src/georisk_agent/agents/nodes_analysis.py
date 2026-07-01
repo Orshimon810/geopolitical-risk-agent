@@ -101,7 +101,7 @@ class PortfolioNetSynthesis(BaseModel):
             "Mixed (significant both ways), or Neutral (all holdings Neutral)."
         )
     )
-    net_confidence: Literal["Low", "Medium", "High"]
+    net_confidence: Literal["Low", "Medium", "High", "insufficient_data"]
     rationale: str = Field(
         description=(
             "1-2 sentence summary of the net portfolio stance and the dominant causal driver. "
@@ -173,8 +173,21 @@ class AnalysisOutput(BaseModel):
             "specifying the destination asset."
         )
     )
-    confidence: Literal["Low", "Medium", "High"] = Field(
-        description="Confidence level based on evidence quality and consistency."
+    confidence: Literal["Low", "Medium", "High", "insufficient_data"] = Field(
+        description=(
+            "Confidence level based on evidence quality and consistency. "
+            "Use 'insufficient_data' when evidence is so sparse or absent that even "
+            "'Low' would overstate certainty — e.g. zero retrieved chunks, fully "
+            "speculative premise with no corroborating source, or event is wholly unverifiable."
+        )
+    )
+    data_gap: bool = Field(
+        default=False,
+        description=(
+            "Set True when the analysis contains qualitative placeholders because numeric "
+            "evidence was unavailable. Indicates that specific percentages, price targets, "
+            "or production estimates could not be grounded in retrieved sources or benchmarks."
+        )
     )
     sources: list[str] = Field(
         default_factory=list,
@@ -285,9 +298,30 @@ Confidence rules:
   MANDATORY LOW when the query uses hedging language: 'reportedly', 'may', 'could',
   'allegedly', 'unconfirmed reports suggest', 'sources say', 'rumored', 'possible',
   'potential'. Conditional events cannot support confident directional projections.
+- insufficient_data when evidence is so sparse or absent that even LOW would overstate
+  certainty. Use when: zero chunks were retrieved, the premise is wholly speculative
+  with no corroborating source, or the event is fully unverifiable from available data.
+  Set data_gap=true alongside this value.
 
 High confidence should be rare in geopolitical analysis.
 Avoid defaulting to "Medium". When in doubt, downgrade.
+
+Numeric precision rules (CRITICAL — prevents hallucinated statistics):
+- Numeric ranges, percentages, price targets, and production estimates are ONLY permitted
+  when explicitly grounded in one of:
+    (a) a retrieved source cited in the sources list,
+    (b) a live market price from the signals feed,
+    (c) an explicit benchmark stated in the query itself.
+- If none of the above apply, express the impact in QUALITATIVE terms only.
+  Examples of acceptable qualitative wording:
+    "significantly higher" instead of "+12–18%"
+    "substantial pressure on margins" instead of "15% EBITDA compression"
+    "elevated risk of supply disruption" instead of "30–40% probability of closure"
+- Set data_gap=true whenever you fall back to qualitative wording due to missing
+  numeric evidence. Do NOT invent percentages, commodity price ranges, stock price
+  targets, production-capacity estimates, or GDP growth figures without a grounded basis.
+- Scenario projections: use direction + mechanism + timeline as the minimum.
+  Add numbers only when anchored to a live price or stated benchmark (cite it explicitly).
 """
 
 
@@ -464,7 +498,7 @@ def _run_portfolio_net_synthesis(
     else:
         net_verdict = "Mixed"
 
-    low_count  = sum(1 for p in portfolio_impacts if p.get("confidence") == "Low")
+    low_count  = sum(1 for p in portfolio_impacts if p.get("confidence") in ("Low", "insufficient_data"))
     high_count = sum(1 for p in portfolio_impacts if p.get("confidence") == "High")
     if low_count >= total / 2:
         net_conf = "Low"
@@ -473,9 +507,13 @@ def _run_portfolio_net_synthesis(
     else:
         net_conf = "Medium"
 
-    # Issue 8: Apply macro confidence ceiling — a Low-confidence macro event
-    # cannot produce a High net portfolio confidence regardless of stock-level scores.
-    if macro_confidence == "Low" and net_conf == "High":
+    # Apply macro confidence ceiling — insufficient_data or Low macro caps net portfolio confidence.
+    if macro_confidence == "insufficient_data":
+        net_conf = "insufficient_data"
+        logger.info(
+            "_run_portfolio_net_synthesis: net_conf set to insufficient_data (macro confidence is insufficient_data)"
+        )
+    elif macro_confidence == "Low" and net_conf == "High":
         net_conf = "Medium"
         logger.info(
             "_run_portfolio_net_synthesis: net_conf capped at Medium (macro confidence is Low)"
@@ -699,6 +737,7 @@ Permitted sources (retrieved for this query):
     scenarios         = output.scenarios
     investor_takeaway = output.investor_takeaway
     confidence        = output.confidence
+    data_gap          = output.data_gap
     impact_vectors    = output.impact_vectors or []
 
     # Use actual retrieved source names — LLM frequently hallucinates outlet names
@@ -752,6 +791,7 @@ Permitted sources (retrieved for this query):
         "scenarios":         scenarios[:3],
         "investor_takeaway": investor_takeaway[:1],
         "confidence":        confidence,
+        "data_gap":          data_gap,
         "sources":           sources,
         "impact_vectors":    impact_vectors,
         "debug": {

@@ -102,4 +102,16 @@ BENCHMARK_QUERIES = [
         ],
     },
 
+
+    # Test 13: confirmed trade policy — EU Chinese EV tariffs
+    # Confirmed regulatory event; tests transmission mechanism reasoning across
+    # European OEMs, Chinese exporters, and battery supply chains.
+    {
+        "query": (
+            "The EU has confirmed provisional tariffs of up to 38% on Chinese electric vehicle imports. "
+            "How will this affect European automakers, Chinese EV exporters, and battery supply chains?"
+        ),
+        "focus": "transmission_mechanisms",
+    },
+
 ]
