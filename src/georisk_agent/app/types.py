@@ -150,5 +150,10 @@ class DynamicAgentState(TypedDict, total=False):
     portfolio_net: Optional[Dict[str, Any]]
     # Aggregated net stance: bull/bear/neutral counts + net_verdict + rationale.
 
+    # ── Event classification (set by analysis_node) ─────────────────
+    event_materiality: str
+    # "high" | "moderate" | "low" — scope of the triggering event;
+    # propagated to macro_context_node and ticker workers to gate risk_score defaults.
+
     # ── Internal routing (stripped by final_output_node) ─────────────
     reviewer_verdict: str           # "PASS" | "RETRY"

@@ -30,6 +30,88 @@ from georisk_agent.agents.schemas_portfolio import (
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Ticker-specific business-model hints
+# Injected into the batch enrichment prompt for well-known tickers so the
+# enrichment LLM uses precise value-chain facts rather than generic labels.
+# ---------------------------------------------------------------------------
+_TICKER_BUSINESS_MODEL_HINTS: dict[str, str] = {
+    "NVDA": (
+        "NVIDIA is a fabless AI accelerator and GPU designer — it does NOT manufacture "
+        "silicon. Fabrication is outsourced to TSMC (including CoWoS advanced packaging, "
+        "which is constrained separately from standard logic wafer capacity). "
+        "economic_role=Consumer (buys TSMC foundry capacity). "
+        "Key exposure vectors: US export controls on H100/H800/B200 AI accelerators, "
+        "China data-center demand (~20-25% of data center revenue pre-ban), "
+        "hyperscaler capex timing (Azure/AWS/Google). "
+        "Do NOT label as generic 'chip consumer' or 'semiconductor company.' "
+        "primary_commodity=None."
+    ),
+    "TSM": (
+        "TSMC (TSM) is the world's largest pure-play contract semiconductor foundry. "
+        "economic_role=Producer (sells wafer fabrication services). "
+        "CRITICAL TIMING FACT: Physical fab capacity ramp takes 18-36 months. "
+        "Within a 3-12 month scenario window, geopolitical changes affect order visibility, "
+        "customer confidence, and stock risk premium — NOT physical wafer output. "
+        "geographic_asset_footprint=['Taiwan', 'USA', 'Japan'] (primary capacity in Taiwan)."
+    ),
+    "ASML": (
+        "ASML is the sole supplier of EUV lithography equipment to semiconductor fabs — "
+        "they make machines, not chips. economic_role=Producer (sells capital equipment). "
+        "Exposure mechanism: geopolitical event → customer capex budget / export-control rules → "
+        "ASML order backlog → ASML revenue. "
+        "exposure_channel for most events: customer-capex / order-book (use 'macro-risk-sentiment' "
+        "only if no direct order-book or export-control effect applies). "
+        "Do NOT describe ASML as exposed through chip production — they do not produce chips."
+    ),
+    "LMT": (
+        "Lockheed Martin is a defense contractor — sells weapons systems and missiles TO "
+        "governments. economic_role=Producer. "
+        "For CONFLICT/ESCALATION events: higher defense budgets → Bullish. "
+        "For POSITIVE/DE-ESCALATION events: reduced procurement urgency and geopolitical risk "
+        "premium → Neutral to mildly negative. "
+        "Semiconductor supply benefit for LMT systems requires 3-5 year procurement cycles — "
+        "do NOT assign near-term semiconductor tailwind for LMT in 3-12 month scenarios."
+    ),
+    "RTX": (
+        "RTX (Raytheon) is a defense and aerospace contractor. economic_role=Producer "
+        "(sells missiles, radar, defense electronics to governments). "
+        "Benefits from rising defense budgets; faces reduced urgency in de-escalation events. "
+        "Semiconductor supply effects on RTX products are multi-year, not near-term."
+    ),
+    "NOC": (
+        "Northrop Grumman is a defense contractor. economic_role=Producer. "
+        "Benefits from rising defense budgets; faces reduced urgency in de-escalation events."
+    ),
+    "BA": (
+        "Boeing is an aerospace and defense manufacturer. economic_role=Mixed: "
+        "commercial aviation (Consumer of components) and defense (Producer of military systems). "
+        "geographic_asset_footprint=['USA'] primarily."
+    ),
+}
+
+
+def _build_ticker_hints_block(holdings: list) -> str:
+    """
+    Return a TICKER-SPECIFIC HINTS block for any portfolio holdings that have
+    known business-model entries in _TICKER_BUSINESS_MODEL_HINTS.
+    """
+    found: list[str] = []
+    for h in holdings:
+        ticker_upper = (h.get("ticker") or "").upper()
+        if ticker_upper in _TICKER_BUSINESS_MODEL_HINTS:
+            found.append(f"  {ticker_upper}: {_TICKER_BUSINESS_MODEL_HINTS[ticker_upper]}")
+    if not found:
+        return ""
+    return (
+        "\n=== TICKER-SPECIFIC BUSINESS-MODEL FACTS (NON-NEGOTIABLE) ===\n"
+        "Apply these facts verbatim when classifying the named tickers. "
+        "They override generic inference:\n"
+        + "\n".join(found)
+        + "\n"
+    )
+
+
 _llm = ChatOpenAI(
     model=settings.model_name,
     api_key=settings.openai_api_key,
@@ -110,6 +192,9 @@ def build_enriched_portfolio(
             f"\nPrimary commodity shock in the macro event: {primary_commodity_shock}"
             if primary_commodity_shock else ""
         )
+        ticker_hints_block = _build_ticker_hints_block(
+            [h for _, h in need_enrichment]
+        )
         prompt = (
             "Classify each portfolio holding with geographic and operational metadata.\n"
             "For each holding provide:\n"
@@ -124,7 +209,8 @@ def build_enriched_portfolio(
             "    SPECIAL: if you do not recognize the ticker as a real publicly-traded company, "
             "set headquarters_country='UNRECOGNIZED_TICKER', economic_role='Unrelated', "
             "geographic_asset_footprint=[], primary_commodity=null.\n"
-            f"{commodity_hint}\n\n"
+            f"{commodity_hint}\n"
+            f"{ticker_hints_block}\n"
             "=== CRITICAL VALUE-CHAIN CLASSIFICATION RULES ===\n"
             "1. FABLESS CHIP DESIGNERS (NVIDIA, AMD, Qualcomm, MediaTek, ARM): "
             "These firms DESIGN chips but do NOT fabricate silicon — they outsource manufacturing "
@@ -213,13 +299,15 @@ def macro_context_node(state: DynamicAgentState) -> DynamicAgentState:
         "     'unknown' — certainty not determinable from the query text."
     )
 
-    # Issue 8: read current macro confidence so it can be carried to all ticker workers
-    macro_confidence = state.get("confidence", "Medium")
+    # Read current macro confidence and materiality so they are carried to all ticker workers.
+    # Both are set programmatically from state — never trusted from the LLM output.
+    macro_confidence   = state.get("confidence", "Medium")
+    macro_materiality  = state.get("event_materiality", "moderate")
 
     try:
         ctx: MacroEventContext = _macro_context_llm.invoke(prompt)
-        # Always rebuild to guarantee impact_vectors and analysis_confidence are correct;
-        # analysis_confidence is always overridden from state — never trusted from LLM.
+        # Always rebuild to guarantee impact_vectors, analysis_confidence, and
+        # event_materiality are correct — they are overridden from state.
         ctx = MacroEventContext(
             event_summary=ctx.event_summary,
             affected_geographies=ctx.affected_geographies,
@@ -228,6 +316,7 @@ def macro_context_node(state: DynamicAgentState) -> DynamicAgentState:
             monetary_policy_signal=ctx.monetary_policy_signal,
             event_certainty=ctx.event_certainty,
             analysis_confidence=macro_confidence,
+            event_materiality=macro_materiality,
         )
     except Exception as exc:
         logger.warning("macro_context_node: LLM call failed: %s — using fallback", exc)
@@ -239,6 +328,7 @@ def macro_context_node(state: DynamicAgentState) -> DynamicAgentState:
             monetary_policy_signal=None,
             event_certainty="unknown",
             analysis_confidence=macro_confidence,
+            event_materiality=macro_materiality,
         )
 
     logger.info(
