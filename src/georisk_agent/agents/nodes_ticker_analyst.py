@@ -17,6 +17,7 @@ the API serialiser, and the frontend) continue to work unchanged.
 """
 
 import logging
+import re
 from typing import Any
 
 from langchain_openai import ChatOpenAI
@@ -24,6 +25,7 @@ from langchain_openai import ChatOpenAI
 from georisk_agent.app.config import settings
 from georisk_agent.app.types import TickerWorkerInput
 from georisk_agent.agents.schemas_portfolio import TickerHoldingAnalysis
+from georisk_agent.agents.archetypes import get_archetype
 
 logger = logging.getLogger(__name__)
 
@@ -394,6 +396,87 @@ provided verbatim in the enriched_holding payload.
 
 
 # ---------------------------------------------------------------------------
+# Archetype prompt block
+# ---------------------------------------------------------------------------
+
+def _humanize_pattern(pattern: str) -> str:
+    """Convert a regex pattern to a readable hint for LLM consumption."""
+    text = pattern
+    text = text.replace(r'\b', '')
+    # Expand non-capturing groups (?:a|b|c) → a/b/c
+    def _expand(m: re.Match) -> str:
+        return m.group(1).replace('|', '/')
+    text = re.sub(r'\(\?:([^)]+)\)', _expand, text)
+    # Expand capturing groups (a|b|c) → a/b/c
+    text = re.sub(r'\(([^)]+)\)', _expand, text)
+    # Common escape sequences
+    text = text.replace(r'\s+', ' ').replace(r'\s', ' ').replace(r'\w+', '').replace(r'\w', '')
+    # Optional single-char wildcard
+    text = re.sub(r'\.\?', '', text)
+    # Remaining regex metacharacters
+    text = re.sub(r'[\\+*?^$\[\]{}]', '', text)
+    return ' '.join(text.split()).strip()
+
+
+def build_archetype_prompt_block(archetype_id: str | None) -> str:
+    """
+    Build an archetype-specific reasoning guidance block for injection into
+    the ticker analyst user message.
+
+    Returns empty string when archetype_id is None or not in ARCHETYPE_REGISTRY,
+    so callers can use it unconditionally: f"{build_archetype_prompt_block(x)}\n".
+    """
+    if not archetype_id:
+        return ""
+    rules = get_archetype(archetype_id)
+    if rules is None:
+        return ""
+
+    lines: list[str] = [
+        f"=== ARCHETYPE-SPECIFIC GUIDANCE: {rules.display_name.upper()} ===",
+        (
+            f"This holding is a {rules.display_name}. "
+            "The rules below OVERRIDE generic economic_role inference when they conflict."
+        ),
+        "",
+        "TYPICAL EXPOSURE CHANNELS:",
+        "  " + ", ".join(rules.typical_exposure_channels),
+        "",
+    ]
+
+    if rules.forbidden_prose_patterns:
+        lines.append(
+            "FORBIDDEN PHRASES — must NOT appear in short_term_analysis, "
+            "long_term_analysis, or causal_reasoning:"
+        )
+        for pat in rules.forbidden_prose_patterns:
+            readable = _humanize_pattern(pat)
+            if readable:
+                lines.append(f'  ❌ "{readable}"')
+        lines.append("")
+
+    if rules.event_sensitivities:
+        lines.append("EVENT SENSITIVITIES (expected verdict direction by event type):")
+        for event_type, verdict in rules.event_sensitivities.items():
+            lines.append(f"  • {event_type} → {verdict}")
+        lines.append("")
+
+    if rules.timing_constraints:
+        lines.append("TIMING CONSTRAINTS:")
+        for constraint in rules.timing_constraints:
+            lines.append(f"  • {constraint}")
+        lines.append("")
+
+    if rules.verdict_calibration:
+        lines.append("VERDICT CALIBRATION:")
+        for rule in rules.verdict_calibration:
+            lines.append(f"  • {rule}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -510,6 +593,9 @@ def ticker_analyst_node(state: TickerWorkerInput) -> dict[str, Any]:
     analysis_confidence = macro_context.get("analysis_confidence", "Medium")
     event_materiality   = macro_context.get("event_materiality", "moderate")
 
+    archetype_block = build_archetype_prompt_block(enriched_holding.get("archetype"))
+    archetype_section = f"{archetype_block}\n" if archetype_block else ""
+
     user_message = (
         f"=== MACRO EVENT CONTEXT ===\n"
         f"Event summary: {macro_context.get('event_summary', query)}\n"
@@ -532,6 +618,7 @@ def ticker_analyst_node(state: TickerWorkerInput) -> dict[str, Any]:
         f"Primary commodity: {enriched_holding.get('primary_commodity') or 'none'}\n"
         f"Headquarters country: {enriched_holding.get('headquarters_country', 'Unknown')}\n"
         f"Current price: {_price_str(portfolio_price)}\n\n"
+        f"{archetype_section}"
         f"=== INVESTOR TAKEAWAY (ALIGNMENT CONSTRAINT) ===\n"
         f"{takeaway_str}\n\n"
         f"Analyse how the macro event affects {ticker} ({name}). "
