@@ -199,6 +199,21 @@ FABLESS CHIP DESIGNERS (NVIDIA, AMD, Qualcomm, MediaTek, ARM, Marvell):
     (4) hyperscaler capex cycles (Azure/AWS/Google spending timing).
   · For export-control easing: name these specific mechanisms, not generic "chip demand."
   · ❌ Do NOT describe NVDA as a "generic consumer of semiconductors."
+  · ❌ Do NOT describe NVDA as having "production capacity," "manufacturing capability,"
+    "fabrication ramp," "enhanced production," or any language implying NVDA itself
+    makes chips. NVDA is FABLESS — only TSMC expands physical wafer output. NVDA gains
+    order visibility, export-control relief, and design-win momentum — not fab capacity.
+
+APPLE-SPECIFIC FACTS (apply to AAPL/Apple regardless of event type):
+  · AAPL designs chips (A-series, M-series) but is FABLESS — fabricated entirely by TSMC.
+  · China revenue ≈ 18-20% of total revenue (Apple's largest market outside USA).
+  · For DE-ESCALATION / export-control EASING events:
+    - Improved TSMC supply-chain confidence → chip availability upside → Neutral to Bullish.
+    - Reduced China revenue risk premium, better operating visibility in China → Neutral to Bullish.
+    ❌ Do NOT assign Bearish because "Chinese chipmakers may become more competitive"
+       — this is a structural 3-5 year risk, NOT a 3-12 month market impact.
+  · For ESCALATION / CONFLICT events:
+    - China revenue at material risk; TSMC Taiwan supply-chain disruption risk → Bearish.
 
 SEMICONDUCTOR EQUIPMENT MAKERS (ASML, Applied Materials, Lam Research, KLA, Tokyo Electron):
   - These firms supply manufacturing TOOLS and chemicals to chip fabs.

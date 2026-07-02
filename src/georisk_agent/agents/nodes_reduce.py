@@ -40,7 +40,8 @@ _INDIRECT_CHANNELS = frozenset({"macro-risk-sentiment", "none"})
 # Used to set data_gap=True and log a warning when the LLM emits hallucinated stats.
 _NUMERIC_RANGE_RE = re.compile(
     r'\b\d+\s*[-–]\s*\d+\s*%'        # "10-15%" or "10–15%"
-    r'|\b\d+(?:\.\d+)?\s*%\s*(?:decline|compression|increase|rise|fall|drop|growth|impact)',
+    r'|\b\d+(?:\.\d+)?\s*%\s*(?:decline|compression|increase|rise|fall|drop|growth|impact)'
+    r'|\b\d+\s*[-–]\s*\d+\s*(?:months?|years?|weeks?|quarters?)\b',  # "3-6 months", "6-12 months"
     re.IGNORECASE,
 )
 
@@ -261,6 +262,10 @@ def reduce_ticker_results_node(state: DynamicAgentState) -> DynamicAgentState:
         "portfolio_net":     portfolio_net,
         # Reset accumulator so a Reviewer RETRY cycle starts clean
         "ticker_analyses":   [],
+        # Escalate numeric precision violations to user-visible data_gap flag.
+        # The LLM system prompt already forbids unsupported ranges; this ensures
+        # any violation that slips through is surfaced beyond the debug log.
+        "data_gap": state.get("data_gap", False) or bool(numeric_violations),
         "debug": {
             **(state.get("debug") or {}),
             "rule_results":              list(all_rule_results),
