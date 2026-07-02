@@ -24,6 +24,7 @@ from typing import Any, Optional
 from georisk_agent.app.types import DynamicAgentState
 from georisk_agent.agents.verdict_rules import (
     enforce_asset_class_verdicts,
+    enforce_defense_contractor_verdicts,
     detect_takeaway_misalignments,
     scrub_numeric_ranges,
 )
@@ -325,6 +326,15 @@ def reduce_ticker_results_node(state: DynamicAgentState) -> DynamicAgentState:
             len(enforce_log), [r["description"] for r in enforce_log],
         )
 
+    # 1b. Defense-contractor de-escalation guard: cap Bullish → Neutral when no
+    #     escalation/conflict signal is present in the LLM's own causal reasoning.
+    ordered, defense_log = enforce_defense_contractor_verdicts(ordered)
+    if defense_log:
+        logger.warning(
+            "reduce_ticker_results_node: defense contractor verdict capped: %s",
+            [r["description"] for r in defense_log],
+        )
+
     # 2. Structural alignment: correct Bearish verdicts for tickers takeaway explicitly buys
     align_log: list = []
     if investor_takeaway:
@@ -335,7 +345,7 @@ def reduce_ticker_results_node(state: DynamicAgentState) -> DynamicAgentState:
                 len(align_log), [r["description"] for r in align_log],
             )
 
-    all_rule_results = enforce_log + align_log
+    all_rule_results = enforce_log + defense_log + align_log
 
     # 3. Deterministic risk-score caps (RULE 9: channel + materiality ceiling)
     ordered, risk_cap_log = _apply_risk_score_caps(ordered, event_materiality)
@@ -368,8 +378,6 @@ def reduce_ticker_results_node(state: DynamicAgentState) -> DynamicAgentState:
             "reduce_ticker_results_node: ticker numeric prose scrubbed: %s",
             ticker_scrub_log,
         )
-
-    all_rule_results = enforce_log + align_log
 
     # Portfolio net synthesis (imported lazily to avoid circular imports at module load)
     from georisk_agent.agents.nodes_analysis import _run_portfolio_net_synthesis
