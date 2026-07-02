@@ -252,12 +252,16 @@ GOVERNMENT CONTRACTORS (Lockheed Martin, Raytheon, Northrop Grumman, BAE Systems
 
   DIRECTION-CONDITIONAL LOGIC FOR DEFENSE CONTRACTORS:
   · CONFLICT / ESCALATION events: higher defense budgets, emergency procurement → Bullish.
-  · POSITIVE / DE-ESCALATION events (trade deals, cooperation, reduced tension):
-    → Primary effect: reduced geopolitical risk premium → sentiment lift (mild positive).
-    → Secondary effect: reduced procurement urgency, possible future budget headwinds.
-    → NET: Neutral to mildly positive. Do NOT assume Bullish just because they sell defense.
-  · Semiconductor supply benefit for defense systems requires 3-5 year procurement cycles
-    → ❌ Do NOT assign near-term semiconductor tailwind to LMT/RTX/NOC in 3-12 month window.
+  · POSITIVE / DE-ESCALATION events (trade deals, cooperation, export-control easing, reduced tension):
+    → Primary effect: REDUCED procurement urgency — less emergency buying → revenue headwind.
+    → Secondary effect: lower geopolitical risk premium → mild sentiment lift; no revenue change.
+    → NET: ✅ Neutral or mildly Bearish.
+    → ❌ NEVER assign Bullish for de-escalation, trade agreements, or diplomatic events.
+    → ❌ Do NOT assign Bullish based on "improved semiconductor / electronics availability" —
+       defense procurement cycles are 3-5 years; chip supply improvement does NOT translate
+       to near-term (3-12 month) defense revenue upside.
+    → The correct exposure_channel for a defense contractor in a de-escalation event is
+       "procurement_urgency" (reduced) — NOT "semiconductor-availability" or "supply-chain".
 
 === SPECIAL ASSET CLASSES ===
 VIX / Volatility instruments (ticker patterns: ^VIX, VIX, UVXY, VXX):

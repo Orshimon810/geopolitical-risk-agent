@@ -560,6 +560,95 @@ def _scrub_one(text: str) -> tuple[str, bool]:
     return " ".join(clean_sentences), was_modified
 
 
+# ---------------------------------------------------------------------------
+# Defense-contractor de-escalation verdict guard
+# ---------------------------------------------------------------------------
+
+_DEFENSE_CONTRACTOR_TICKERS: frozenset[str] = frozenset({
+    "LMT", "RTX", "NOC", "GD", "HII", "LDOS", "BA", "BAESY", "L3HT",
+})
+
+# Causal text patterns that legitimately justify Bullish for a defense contractor:
+# conflict, escalation, emergency procurement, NATO spending increases, etc.
+_DEFENSE_ESCALATION_RE = re.compile(
+    r'\b(defense budget|emergency procurement|nato spending|nato target'
+    r'|conflict|escalation|arms race|war|military build.?up'
+    r'|defense appropriation|increased defense|higher defense)\b',
+    re.IGNORECASE,
+)
+
+
+def enforce_defense_contractor_verdicts(
+    impacts: list[dict],
+) -> tuple[list[dict], list[RuleResult]]:
+    """
+    Cap Bullish verdicts for known defense contractors unless their causal
+    reasoning explicitly references escalation / conflict / defense-budget drivers.
+
+    Defense contractors in de-escalation or supply-chain events should be Neutral:
+    reduced procurement urgency is a headwind, not a tailwind, regardless of any
+    secondary semiconductor availability benefit (procurement cycles are 3-5 years).
+
+    Only fires when verdict == "Bullish" AND no escalation signal is present in
+    the combined prose fields — guarantees the guard never fires in genuine
+    conflict scenarios where Bullish IS correct.
+    """
+    corrected: list[dict] = []
+    rule_results: list[RuleResult] = []
+
+    for p in impacts:
+        ticker = (p.get("ticker") or "").upper()
+        if ticker not in _DEFENSE_CONTRACTOR_TICKERS:
+            corrected.append(p)
+            continue
+
+        verdict = p.get("market_sentiment") or p.get("verdict", "")
+        if verdict != "Bullish":
+            corrected.append(p)
+            continue
+
+        prose = " ".join([
+            p.get("causal_reasoning", ""),
+            p.get("short_term_analysis", ""),
+            p.get("long_term_analysis", ""),
+        ])
+
+        if _DEFENSE_ESCALATION_RE.search(prose):
+            # Bullish is justified — the LLM named a concrete escalation driver.
+            corrected.append(p)
+            continue
+
+        # No escalation signal: cap to Neutral
+        p = dict(p)
+        original_verdict = verdict
+        p["market_sentiment"] = "Neutral"
+        p["verdict"]          = "Neutral"
+        annotation = (
+            "[Defense-contractor de-escalation guard] "
+            + (p.get("causal_reasoning") or p.get("reasoning", ""))
+            + " Defense contractor Bullish verdict requires an explicit escalation/"
+            "conflict/defense-budget driver in causal reasoning. No such signal found; "
+            "verdict capped at Neutral — de-escalation reduces procurement urgency."
+        ).strip()
+        p["causal_reasoning"] = annotation
+        p["reasoning"]        = annotation
+
+        rule_results.append(RuleResult(
+            ticker=ticker,
+            rule_source="STRUCTURAL_DEFENSE_CONTRACTOR_DEESCALATION",
+            priority=int(RulePriority.STRUCTURAL),
+            original_verdict=original_verdict,
+            final_verdict="Neutral",
+            description=(
+                f"{ticker}: Bullish→Neutral (defense contractor with no escalation signal "
+                "in causal reasoning; de-escalation events reduce procurement urgency)"
+            ),
+        ))
+        corrected.append(p)
+
+    return corrected, rule_results
+
+
 def scrub_numeric_ranges(texts: list[str]) -> tuple[list[str], bool]:
     """
     Replace unsupported numeric range patterns in a list of text strings with
