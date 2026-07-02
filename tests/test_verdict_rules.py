@@ -1,6 +1,7 @@
 import pytest
 from georisk_agent.agents.verdict_rules import (
     enforce_asset_class_verdicts,
+    enforce_defense_contractor_verdicts,
     extract_price_benchmarks,
     check_scenario_polarity,
     RulePriority,
@@ -276,3 +277,110 @@ class TestCheckScenarioPolarity:
         # Both keywords present — equal score → no check
         result = check_scenario_polarity(scenarios, impacts)
         assert isinstance(result, list)
+
+
+# ---------------------------------------------------------------------------
+# enforce_defense_contractor_verdicts
+# ---------------------------------------------------------------------------
+
+def _defense_holding(ticker, verdict, causal="", short="", long_=""):
+    return {
+        "ticker": ticker,
+        "name": ticker,
+        "market_sentiment": verdict,
+        "verdict": verdict,
+        "causal_reasoning": causal,
+        "short_term_analysis": short,
+        "long_term_analysis": long_,
+        "reasoning": causal,
+        "confidence": "Medium",
+        "risk_score": "Medium",
+    }
+
+
+class TestDefenseContractorDeEscalationGuard:
+    def test_lmt_bullish_no_escalation_signal_capped_to_neutral(self):
+        impacts = [_defense_holding(
+            "LMT", "Bullish",
+            causal="Improved semiconductor availability and lower electronics costs benefit defense systems.",
+        )]
+        result, rules = enforce_defense_contractor_verdicts(impacts)
+        assert result[0]["market_sentiment"] == "Neutral"
+        assert result[0]["verdict"] == "Neutral"
+        assert len(rules) == 1
+        assert rules[0]["rule_source"] == "STRUCTURAL_DEFENSE_CONTRACTOR_DEESCALATION"
+        assert rules[0]["original_verdict"] == "Bullish"
+        assert rules[0]["final_verdict"] == "Neutral"
+
+    def test_lmt_bullish_with_escalation_signal_kept_bullish(self):
+        impacts = [_defense_holding(
+            "LMT", "Bullish",
+            causal="NATO spending targets increased; emergency procurement orders up significantly.",
+        )]
+        result, rules = enforce_defense_contractor_verdicts(impacts)
+        assert result[0]["market_sentiment"] == "Bullish"
+        assert rules == []
+
+    def test_rtx_bullish_conflict_signal_kept_bullish(self):
+        impacts = [_defense_holding(
+            "RTX", "Bullish",
+            causal="Armed conflict in Eastern Europe drives defense budget increases.",
+        )]
+        result, rules = enforce_defense_contractor_verdicts(impacts)
+        assert result[0]["market_sentiment"] == "Bullish"
+        assert rules == []
+
+    def test_noc_neutral_unchanged(self):
+        impacts = [_defense_holding("NOC", "Neutral", causal="Balanced forces; de-escalation.")]
+        result, rules = enforce_defense_contractor_verdicts(impacts)
+        assert result[0]["market_sentiment"] == "Neutral"
+        assert rules == []
+
+    def test_noc_bearish_unchanged(self):
+        impacts = [_defense_holding("NOC", "Bearish", causal="Reduced procurement urgency.")]
+        result, rules = enforce_defense_contractor_verdicts(impacts)
+        assert result[0]["market_sentiment"] == "Bearish"
+        assert rules == []
+
+    def test_non_defense_ticker_bullish_unchanged(self):
+        impacts = [_defense_holding("AAPL", "Bullish", causal="De-escalation improves supply chain.")]
+        result, rules = enforce_defense_contractor_verdicts(impacts)
+        assert result[0]["market_sentiment"] == "Bullish"
+        assert rules == []
+
+    def test_escalation_signal_in_short_term_field_keeps_bullish(self):
+        impacts = [_defense_holding(
+            "GD", "Bullish",
+            causal="Supply chain relief.",
+            short="Defense budget appropriation increased by Congress.",
+        )]
+        result, rules = enforce_defense_contractor_verdicts(impacts)
+        assert result[0]["market_sentiment"] == "Bullish"
+        assert rules == []
+
+    def test_war_keyword_in_long_term_keeps_bullish(self):
+        impacts = [_defense_holding(
+            "HII", "Bullish",
+            causal="General tailwinds.",
+            long_="Risk of war in Pacific heightens shipbuilding demand.",
+        )]
+        result, rules = enforce_defense_contractor_verdicts(impacts)
+        assert result[0]["market_sentiment"] == "Bullish"
+        assert rules == []
+
+    def test_original_dict_not_mutated(self):
+        original = _defense_holding("LMT", "Bullish", causal="Electronics cost savings.")
+        result, _ = enforce_defense_contractor_verdicts([original])
+        assert original["market_sentiment"] == "Bullish"   # original dict unchanged
+        assert result[0]["market_sentiment"] == "Neutral"
+
+    def test_empty_impacts_returns_empty(self):
+        result, rules = enforce_defense_contractor_verdicts([])
+        assert result == []
+        assert rules == []
+
+    def test_lowercase_ticker_matched(self):
+        impacts = [_defense_holding("lmt", "Bullish", causal="Semiconductor tailwind.")]
+        result, rules = enforce_defense_contractor_verdicts(impacts)
+        assert result[0]["market_sentiment"] == "Neutral"
+        assert len(rules) == 1
