@@ -9,6 +9,7 @@ from georisk_agent.app.config import settings
 from georisk_agent.app.types import DynamicAgentState
 from georisk_agent.agents.verdict_rules import (
     extract_price_benchmarks,
+    scrub_numeric_ranges,
 )
 
 logger = logging.getLogger(__name__)
@@ -946,15 +947,34 @@ Permitted sources (retrieved for this query):
         ]
 
     # -------------------------
+    # Deterministic numeric-range scrubbing (macro fields)
+    # Replaces unsupported "X-Y%" and "X-Y months" patterns with qualitative
+    # equivalents so they never reach the user's UI. Exempt: grounded facts
+    # like "18-36 months capacity ramp" (TSM) which are known constraints.
+    # -------------------------
+
+    market_impacts,    _mi_dirty  = scrub_numeric_ranges(market_impacts[:6])
+    risks,             _r_dirty   = scrub_numeric_ranges(risks[:4])
+    scenarios,         _s_dirty   = scrub_numeric_ranges(scenarios[:3])
+    investor_takeaway, _it_dirty  = scrub_numeric_ranges(investor_takeaway[:1])
+    if _mi_dirty or _r_dirty or _s_dirty or _it_dirty:
+        data_gap = True
+        logger.warning(
+            "analysis_node: unsupported numeric ranges scrubbed from macro fields "
+            "(market_impacts=%s risks=%s scenarios=%s takeaway=%s)",
+            _mi_dirty, _r_dirty, _s_dirty, _it_dirty,
+        )
+
+    # -------------------------
     # Return updated state
     # -------------------------
 
     return {
         **state,
-        "market_impacts":    market_impacts[:6],
-        "risks":             risks[:4],
-        "scenarios":         scenarios[:3],
-        "investor_takeaway": investor_takeaway[:1],
+        "market_impacts":    market_impacts,
+        "risks":             risks,
+        "scenarios":         scenarios,
+        "investor_takeaway": investor_takeaway,
         "confidence":        confidence,
         "data_gap":          data_gap,
         "sources":           sources,
