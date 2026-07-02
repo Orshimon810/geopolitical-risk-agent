@@ -27,6 +27,7 @@ from georisk_agent.agents.schemas_portfolio import (
     MacroEventContext,
     EconomicRole,
 )
+from georisk_agent.agents.archetypes import get_ticker_archetype
 
 logger = logging.getLogger(__name__)
 
@@ -182,6 +183,7 @@ def build_enriched_portfolio(
     need_enrichment: list[tuple[int, PortfolioHolding]] = []
     for i, h in enumerate(holdings):
         if h.get("geographic_asset_footprint") is not None or h.get("economic_role"):
+            _archetype_rules = get_ticker_archetype(h.get("ticker", ""))
             results.append(EnrichedHolding(
                 ticker=h.get("ticker", ""),
                 name=h.get("name", h.get("ticker", "")),
@@ -192,6 +194,7 @@ def build_enriched_portfolio(
                 economic_role=h.get("economic_role", "Unrelated"),
                 primary_commodity=h.get("primary_commodity"),
                 headquarters_country=h.get("headquarters_country", "Unknown"),
+                archetype=_archetype_rules.archetype_id if _archetype_rules else None,
             ).model_dump())
         else:
             results.append(None)   # placeholder; filled below
@@ -254,6 +257,7 @@ def build_enriched_portfolio(
 
         for list_pos, (state_pos, h) in enumerate(need_enrichment):
             meta = meta_list[list_pos] if list_pos < len(meta_list) else None
+            _archetype_rules = get_ticker_archetype(h.get("ticker", ""))
             results[state_pos] = EnrichedHolding(
                 ticker=h.get("ticker", ""),
                 name=h.get("name", h.get("ticker", "")),
@@ -264,6 +268,7 @@ def build_enriched_portfolio(
                 economic_role=(meta.economic_role if meta else "Unrelated"),
                 primary_commodity=(meta.primary_commodity if meta else None),
                 headquarters_country=(meta.headquarters_country if meta else "Unknown"),
+                archetype=_archetype_rules.archetype_id if _archetype_rules else None,
             ).model_dump()
 
     return results

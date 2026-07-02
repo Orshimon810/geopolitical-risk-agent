@@ -63,6 +63,14 @@ class EnrichedHolding(BaseModel):
         default="Unknown",
         description="Country of incorporation / primary listing. NOT a proxy for operational exposure.",
     )
+    archetype: Optional[str] = Field(
+        default=None,
+        description=(
+            "Business-model archetype id for this holding (e.g. 'fabless_ai_chip_designer', "
+            "'defense_contractor'). Populated deterministically from TICKER_ARCHETYPE_MAP "
+            "for known tickers; None for unrecognised tickers."
+        ),
+    )
 
 
 class MacroEventContext(BaseModel):
