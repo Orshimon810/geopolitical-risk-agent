@@ -482,9 +482,12 @@ _SCRUB_EXEMPT_RE = re.compile(
 
 def _pct_qualifier(lo: int, hi: int) -> str:
     avg = (lo + hi) / 2
-    if avg < 5:   return "modest"
-    if avg < 15:  return "material"
-    if avg < 30:  return "significant"
+    if avg < 5:
+        return "modest"
+    if avg < 15:
+        return "material"
+    if avg < 30:
+        return "significant"
     return "substantial"
 
 
@@ -494,8 +497,10 @@ def _time_qualifier(lo: int, hi: int, unit: str) -> str:
         return "over the coming weeks"
     if "month" in unit:
         avg = (lo + hi) / 2
-        if avg <= 4:  return "near term"
-        if avg <= 9:  return "near to medium term"
+        if avg <= 4:
+            return "near term"
+        if avg <= 9:
+            return "near to medium term"
         return "medium term"
     return "medium to longer term"   # years / quarters
 
@@ -529,10 +534,14 @@ def _scrub_one(text: str) -> tuple[str, bool]:
         def _repl_single_pct(m: re.Match) -> str:
             val = float(m.group(1))
             word = m.group(2)
-            if val < 5:   qual = "modest"
-            elif val < 15: qual = "material"
-            elif val < 30: qual = "significant"
-            else:          qual = "substantial"
+            if val < 5:
+                qual = "modest"
+            elif val < 15:
+                qual = "material"
+            elif val < 30:
+                qual = "significant"
+            else:
+                qual = "substantial"
             return f"{qual} {word}"
 
         sent = _SCRUB_SINGLE_PCT_RE.sub(_repl_single_pct, sent)
