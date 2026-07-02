@@ -42,6 +42,8 @@ import re
 from enum import IntEnum
 from typing import TypedDict
 
+from georisk_agent.agents.archetypes import get_archetype, get_ticker_archetype
+
 logger = logging.getLogger(__name__)
 
 
@@ -644,6 +646,178 @@ def enforce_defense_contractor_verdicts(
                 "in causal reasoning; de-escalation events reduce procurement urgency)"
             ),
         ))
+        corrected.append(p)
+
+    return corrected, rule_results
+
+
+# ---------------------------------------------------------------------------
+# Archetype bounds enforcement
+# ---------------------------------------------------------------------------
+
+# Sentences containing these patterns are EXEMPT from forbidden-prose scrubbing
+# even when they also match a forbidden pattern.  Rationale: a fabless chip
+# designer's analysis correctly discusses TSMC/foundry capacity — those sentences
+# are about the foundry partner, not the fabless company itself.
+_ARCHETYPE_PROSE_EXEMPT: dict[str, re.Pattern] = {
+    "fabless_ai_chip_designer": re.compile(
+        r'\bTSMC\b|\bfoundr(?:y|ies)\b|\bCoWoS\b|\bpackag(?:ing|er)\b|\bwafer\b|\bfab\b',
+        re.IGNORECASE,
+    ),
+}
+
+
+def enforce_archetype_bounds(
+    impacts: list[dict],
+    enriched_portfolio: list[dict] | None = None,
+) -> tuple[list[dict], list[RuleResult]]:
+    """
+    Generalized archetype-level safety backstop.
+
+    Two enforcement passes per holding with a known archetype:
+
+    Pass 1 — ARCHETYPE_FORBIDDEN_PROSE:
+        Scan short_term_analysis, long_term_analysis, causal_reasoning for
+        archetype.forbidden_prose_patterns.  Remove offending sentences and
+        insert a factual fallback if the field is emptied.  For fabless chip
+        designers, sentences referencing TSMC/foundry/CoWoS are exempted since
+        they correctly describe the foundry partner's capacity.
+
+    Pass 2 — ARCHETYPE_VERDICT_CAP (defense_contractor only):
+        If verdict == "Bullish" and the combined causal prose contains no
+        escalation/conflict/defense-budget signal, cap the verdict to Neutral.
+        The specific ticker-list guard enforce_defense_contractor_verdicts()
+        runs first; this pass covers any registry entries not in that hardcoded
+        set and makes the logic archetype-driven rather than ticker-list-driven.
+
+    The archetype for each holding is resolved from enriched_portfolio first
+    (populated by macro_context_node), falling back to TICKER_ARCHETYPE_MAP for
+    any ticker not present there.
+
+    Returns:
+        (corrected_impacts, rule_results)
+    """
+    # Build ticker → archetype_id lookup from enriched portfolio (fast path)
+    archetype_id_by_ticker: dict[str, str] = {}
+    for eh in (enriched_portfolio or []):
+        t = (eh.get("ticker") or "").upper()
+        aid = eh.get("archetype")
+        if t and aid:
+            archetype_id_by_ticker[t] = aid
+
+    rule_results: list[RuleResult] = []
+    corrected: list[dict] = []
+
+    for p in impacts:
+        ticker = (p.get("ticker") or "").upper()
+
+        # Resolve archetype: enriched_portfolio first, then registry fallback
+        archetype_id = archetype_id_by_ticker.get(ticker)
+        if not archetype_id:
+            fallback_rules = get_ticker_archetype(ticker)
+            archetype_id = fallback_rules.archetype_id if fallback_rules else None
+
+        if not archetype_id:
+            corrected.append(p)
+            continue
+
+        rules = get_archetype(archetype_id)
+        if not rules:
+            corrected.append(p)
+            continue
+
+        p = dict(p)  # shallow copy — never mutate shared state
+        current_verdict = p.get("market_sentiment") or p.get("verdict", "Neutral")
+
+        # ── Pass 1: forbidden prose scrubbing ─────────────────────────────────
+        if rules.forbidden_prose_patterns:
+            forbidden_re = re.compile(
+                "|".join(rules.forbidden_prose_patterns),
+                re.IGNORECASE,
+            )
+            exempt_re = _ARCHETYPE_PROSE_EXEMPT.get(archetype_id)
+            prose_corrected = False
+
+            for field in ("short_term_analysis", "long_term_analysis", "causal_reasoning"):
+                text = p.get(field, "")
+                if not text or not forbidden_re.search(text):
+                    continue
+
+                sentences = re.split(r'(?<=[.!?])\s+', text)
+                clean: list[str] = []
+                for sent in sentences:
+                    if forbidden_re.search(sent) and not (exempt_re and exempt_re.search(sent)):
+                        prose_corrected = True
+                    else:
+                        clean.append(sent)
+
+                new_text = " ".join(clean).strip()
+                if not new_text:
+                    channels = ", ".join(rules.typical_exposure_channels[:3])
+                    new_text = (
+                        f"This holding is a {rules.display_name}. "
+                        f"Exposure runs through {channels}."
+                    )
+                p[field] = new_text
+
+            if prose_corrected:
+                p["short_term_impact"] = p.get("short_term_analysis", p.get("short_term_impact", ""))
+                p["long_term_impact"]  = p.get("long_term_analysis",  p.get("long_term_impact", ""))
+                p["reasoning"]         = p.get("causal_reasoning",    p.get("reasoning", ""))
+                rule_results.append(RuleResult(
+                    ticker=ticker,
+                    rule_source="ARCHETYPE_FORBIDDEN_PROSE",
+                    priority=int(RulePriority.STRUCTURAL),
+                    original_verdict=current_verdict,
+                    final_verdict=current_verdict,
+                    description=(
+                        f"{ticker} ({rules.display_name}): forbidden prose pattern(s) "
+                        f"scrubbed from analysis fields"
+                    ),
+                ))
+                logger.warning(
+                    "[ARCHETYPE_FORBIDDEN_PROSE] %s (%s): forbidden prose scrubbed",
+                    ticker, rules.display_name,
+                )
+
+        # ── Pass 2: verdict bounds (defense_contractor) ───────────────────────
+        if archetype_id == "defense_contractor":
+            verdict = p.get("market_sentiment") or p.get("verdict", "")
+            if verdict == "Bullish":
+                prose = " ".join([
+                    p.get("causal_reasoning", ""),
+                    p.get("short_term_analysis", ""),
+                    p.get("long_term_analysis", ""),
+                ])
+                if not _DEFENSE_ESCALATION_RE.search(prose):
+                    p["market_sentiment"] = "Neutral"
+                    p["verdict"]          = "Neutral"
+                    annotation = (
+                        f"[Archetype bounds: {rules.display_name}] "
+                        + (p.get("causal_reasoning") or "")
+                        + " Bullish verdict requires an explicit escalation/conflict/"
+                        "defense-budget driver. No such signal found; verdict capped "
+                        "at Neutral (de-escalation events reduce procurement urgency)."
+                    ).strip()
+                    p["causal_reasoning"] = annotation
+                    p["reasoning"]        = annotation
+                    rule_results.append(RuleResult(
+                        ticker=ticker,
+                        rule_source="ARCHETYPE_VERDICT_CAP",
+                        priority=int(RulePriority.STRUCTURAL),
+                        original_verdict="Bullish",
+                        final_verdict="Neutral",
+                        description=(
+                            f"{ticker} (defense_contractor): Bullish→Neutral via archetype bounds "
+                            "(no escalation signal in causal reasoning)"
+                        ),
+                    ))
+                    logger.warning(
+                        "[ARCHETYPE_VERDICT_CAP] %s: Bullish→Neutral "
+                        "(defense contractor, no escalation signal)",
+                        ticker,
+                    )
+
         corrected.append(p)
 
     return corrected, rule_results
