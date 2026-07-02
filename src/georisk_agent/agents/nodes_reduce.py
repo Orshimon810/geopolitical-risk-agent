@@ -25,6 +25,7 @@ from georisk_agent.app.types import DynamicAgentState
 from georisk_agent.agents.verdict_rules import (
     enforce_asset_class_verdicts,
     detect_takeaway_misalignments,
+    scrub_numeric_ranges,
 )
 
 logger = logging.getLogger(__name__)
@@ -44,6 +45,122 @@ _NUMERIC_RANGE_RE = re.compile(
     r'|\b\d+\s*[-–]\s*\d+\s*(?:months?|years?|weeks?|quarters?)\b',  # "3-6 months", "6-12 months"
     re.IGNORECASE,
 )
+
+# ---------------------------------------------------------------------------
+# NVDA prose guard
+# Removes sentences that misframe NVDA as a chip manufacturer rather than a
+# fabless designer. The LLM prompt (RULE 8) already forbids these phrases;
+# this is the deterministic backstop that runs after LLM generation.
+# ---------------------------------------------------------------------------
+
+_NVDA_FORBIDDEN_RE = re.compile(
+    r'\bconsumer of semiconductors\b'
+    r'|\bproduction capacity\b'
+    r'|\bproduction capabilities?\b'
+    r'|\bexpand(?:ed|ing|s)?\s+(?:its\s+)?production\b'
+    r'|\benhanced production\b'
+    r'|\bmanufacturing (?:capacity|capabilities?|expansion)\b'
+    r'|\bfabrication (?:capacity|ramp|expansion)\b',
+    re.IGNORECASE,
+)
+
+# A sentence is exempt from removal if it explicitly references TSMC/foundry/CoWoS —
+# that means the sentence IS correctly describing TSMC's capacity, not NVDA's.
+_NVDA_EXEMPT_RE = re.compile(
+    r'\bTSMC\b|\bfoundr(?:y|ies)\b|\bCoWoS\b'
+    r'|\bpackag(?:ing|er)\b|\bwafer\b|\bfab\b',
+    re.IGNORECASE,
+)
+
+_NVDA_FALLBACK = (
+    "NVDA is a fabless AI accelerator and GPU designer; near-term exposure is via "
+    "US export-control relief, China AI/data-center demand recovery, and TSMC/CoWoS "
+    "foundry capacity availability — not NVIDIA's own production capacity."
+)
+
+
+def _apply_nvda_prose_guard(
+    impacts: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """
+    Scan NVDA's prose fields and remove sentences that misframe NVIDIA as a
+    chip manufacturer (forbidden frames). Sentences that explicitly reference
+    TSMC/foundry/CoWoS/wafer are exempted — they correctly describe the foundry
+    partner's capacity, not NVIDIA's own.
+
+    If removal empties a field, a factual fallback sentence is inserted.
+    Syncs legacy aliases (short_term_impact, long_term_impact, reasoning) after
+    any modification.
+    """
+    corrections: list[str] = []
+    result: list[dict[str, Any]] = []
+
+    for p in impacts:
+        if (p.get("ticker") or "").upper() != "NVDA":
+            result.append(p)
+            continue
+
+        p = dict(p)
+        changed = False
+
+        for field in ("short_term_analysis", "long_term_analysis", "causal_reasoning"):
+            text = p.get(field, "")
+            if not text or not _NVDA_FORBIDDEN_RE.search(text):
+                continue
+
+            sentences = re.split(r'(?<=[.!?])\s+', text)
+            clean: list[str] = []
+            for sent in sentences:
+                if _NVDA_FORBIDDEN_RE.search(sent) and not _NVDA_EXEMPT_RE.search(sent):
+                    corrections.append(
+                        f"NVDA: removed forbidden frame from '{field}': {sent[:100]!r}"
+                    )
+                    changed = True
+                else:
+                    clean.append(sent)
+
+            new_text = " ".join(clean).strip()
+            p[field] = new_text if new_text else _NVDA_FALLBACK
+
+        if changed:
+            # Keep legacy aliases in sync
+            p["short_term_impact"] = p.get("short_term_analysis", p.get("short_term_impact", ""))
+            p["long_term_impact"]  = p.get("long_term_analysis",  p.get("long_term_impact",  ""))
+            p["reasoning"]         = p.get("causal_reasoning",    p.get("reasoning",         ""))
+
+        result.append(p)
+
+    return result, corrections
+
+
+def _scrub_ticker_numeric_prose(
+    impacts: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    """
+    Apply scrub_numeric_ranges() to each ticker's prose fields so that
+    unsupported numeric range violations detected earlier are actually removed
+    from the output the user sees (not just logged).
+
+    Syncs legacy aliases after any modification.
+    """
+    _PROSE_FIELDS = ("short_term_analysis", "long_term_analysis", "causal_reasoning")
+    log_messages: list[str] = []
+    result: list[dict[str, Any]] = []
+
+    for p in impacts:
+        texts = [p.get(f, "") for f in _PROSE_FIELDS]
+        scrubbed, modified = scrub_numeric_ranges(texts)
+        if modified:
+            p = dict(p)
+            for field, new_text in zip(_PROSE_FIELDS, scrubbed):
+                p[field] = new_text
+            p["short_term_impact"] = p["short_term_analysis"]
+            p["long_term_impact"]  = p["long_term_analysis"]
+            p["reasoning"]         = p["causal_reasoning"]
+            log_messages.append(f"{p.get('ticker', '?')}: numeric prose scrubbed")
+        result.append(p)
+
+    return result, log_messages
 
 
 def _apply_risk_score_caps(
@@ -227,12 +344,29 @@ def reduce_ticker_results_node(state: DynamicAgentState) -> DynamicAgentState:
             "reduce_ticker_results_node: risk_score caps applied: %s", risk_cap_log
         )
 
-    # 4. Numeric precision violation detection (logging only — does not modify prose)
+    # 3.5. NVDA-specific forbidden-frame guard — remove sentences that misframe
+    #      NVIDIA as a chip manufacturer (e.g. "consumer of semiconductors",
+    #      "production capacity"). Runs after risk caps so verdicts are stable.
+    ordered, nvda_guard_log = _apply_nvda_prose_guard(ordered)
+    if nvda_guard_log:
+        logger.warning(
+            "reduce_ticker_results_node: NVDA prose guard fired: %s", nvda_guard_log
+        )
+
+    # 4. Numeric precision violation detection (for logging / debug record)
     _, numeric_violations = _flag_numeric_precision_violations(ordered)
     if numeric_violations:
         logger.warning(
             "reduce_ticker_results_node: numeric precision violations detected: %s",
             numeric_violations,
+        )
+
+    # 4b. Scrub detected violations from ticker prose so they never reach the UI.
+    ordered, ticker_scrub_log = _scrub_ticker_numeric_prose(ordered)
+    if ticker_scrub_log:
+        logger.warning(
+            "reduce_ticker_results_node: ticker numeric prose scrubbed: %s",
+            ticker_scrub_log,
         )
 
     all_rule_results = enforce_log + align_log
