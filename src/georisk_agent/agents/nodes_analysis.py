@@ -250,6 +250,18 @@ class PortfolioNetSynthesis(BaseModel):
     )
 
 
+class PortfolioTakeaway(BaseModel):
+    """Portfolio-specific investor takeaway generated after all ticker verdicts are finalized."""
+    bullets: list[str] = Field(
+        description=(
+            "3-6 investor takeaway bullet strings. Each must be 1-2 sentences, "
+            "mechanism-specific, and use conditional language "
+            "('If [event] is credible,...'). "
+            "Only reference holdings in the provided list — never invent others."
+        )
+    )
+
+
 class AnalysisOutput(BaseModel):
     reasoning: str = Field(
         description=(
@@ -351,8 +363,9 @@ _llm = ChatOpenAI(
     temperature=0.2,
 )
 
-structured_llm = _llm.with_structured_output(AnalysisOutput)
-_net_llm       = _llm.with_structured_output(PortfolioNetSynthesis)
+structured_llm  = _llm.with_structured_output(AnalysisOutput)
+_net_llm        = _llm.with_structured_output(PortfolioNetSynthesis)
+_takeaway_llm   = _llm.with_structured_output(PortfolioTakeaway)
 
 
 # -------------------------
@@ -708,6 +721,258 @@ def _run_portfolio_net_synthesis(
             "net_confidence": net_conf,
             "rationale":      f"{net_verdict}: {bull} bullish, {bear} bearish, {neut} neutral holdings.",
         }
+
+
+# -------------------------
+# Portfolio-aware takeaway
+# -------------------------
+
+_CHANNEL_DISPLAY: dict[str, str] = {
+    "export-controls":            "export-control policy",
+    "china-demand":               "China AI / data-center demand",
+    "foundry-dependency":         "foundry partner capacity",
+    "hyperscaler-capex":          "hyperscaler capex cycles",
+    "advanced-packaging":         "advanced packaging availability",
+    "order-visibility":           "customer order visibility",
+    "utilization":                "fab utilization",
+    "customer-demand":            "customer demand trends",
+    "capacity-ramp-lag":          "physical capacity ramp lag",
+    "geopolitical-risk-premium":  "geopolitical risk premium",
+    "customer-capex":             "customer capex decisions",
+    "order-backlog":              "order backlog",
+    "export-control-restriction": "export licence restrictions",
+    "fab-utilization":            "fab utilization",
+    "macro-risk-sentiment":       "macro risk sentiment",
+    "china-revenue":              "China revenue exposure",
+    "supply-chain-input":         "supply-chain input stability",
+    "procurement-urgency":        "procurement urgency",
+    "defense-budget":             "defense budget cycles",
+    "delayed-supply-chain-input": "delayed supply-chain inputs",
+    "cloud-infrastructure-costs": "cloud infrastructure costs",
+    "ad-revenue-sensitivity":     "ad revenue sensitivity",
+    "regulatory-risk":            "regulatory risk",
+    "interest-rates":             "interest rate environment",
+    "credit-risk":                "credit quality",
+    "market-volatility":          "market volatility",
+    "capital-markets-activity":   "capital markets activity",
+    "fuel-input-cost":            "fuel input costs",
+    "travel-demand":              "travel demand",
+    "currency-exposure":          "currency exposure",
+    "consumer-spending":          "consumer spending",
+    "import-costs":               "import costs",
+    "utilization-rates":          "utilization rates",
+    "commodity-price":            "commodity price",
+    "production-volume":          "production volume",
+    "input-cost":                 "input cost",
+    "auto-demand":                "auto demand",
+    "steel-aluminum-input":       "steel / aluminum input costs",
+    "battery-input-cost":         "battery raw material costs",
+    "charging-infrastructure":    "charging infrastructure",
+    "policy-incentives":          "policy incentives",
+    "ev-demand":                  "EV demand trajectory",
+    "none":                       "indirect market sentiment",
+}
+
+
+def _deterministic_takeaway_fallback(
+    bullish: list[dict],
+    neutral: list[dict],
+    bearish: list[dict],
+    query: str,
+) -> list[str]:
+    """
+    Build mechanical takeaway bullets from verdict groups when the LLM call fails.
+    Pure function — no LLM, no external I/O.
+    """
+    bullets: list[str] = []
+    event_hint = (query[:80] + "...") if len(query) > 80 else query
+
+    if bullish:
+        names = ", ".join(f"{s['ticker']} ({s['display_name']})" for s in bullish)
+        mechs = "; ".join(
+            f"{s['ticker']}: {', '.join(s['channels'][:2])}" for s in bullish
+        )
+        bullets.append(
+            f"If {event_hint} is credible, {names} may benefit — "
+            f"primary mechanisms: {mechs}."
+        )
+
+    if neutral:
+        names = ", ".join(f"{s['ticker']} ({s['display_name']})" for s in neutral)
+        ch    = neutral[0]["channels"]
+        bullets.append(
+            f"{names} appears broadly balanced: exposure via "
+            f"{', '.join(ch[:2])}. Monitor for confirmation before repositioning."
+        )
+
+    if bearish:
+        names = ", ".join(f"{s['ticker']} ({s['display_name']})" for s in bearish)
+        ch    = bearish[0]["channels"]
+        bullets.append(
+            f"{names} faces possible pressure via "
+            f"{', '.join(ch[:2])}. Position sizes merit review if event confirms."
+        )
+
+    if not bullets:
+        bullets.append(
+            "Monitor portfolio holdings for event confirmation before repositioning. "
+            "No directional signal is supported by current analysis."
+        )
+
+    return bullets
+
+
+def _build_portfolio_takeaway(
+    portfolio_impacts: list[dict],
+    enriched_portfolio: list[dict],
+    query: str,
+    macro_takeaway: list[str],
+) -> list[str]:
+    """
+    Generate a portfolio-specific, archetype-driven investor takeaway after all
+    ticker verdicts are finalized and deterministic guards have run.
+
+    Replaces the generic Phase 1 macro takeaway with mechanism-specific bullets
+    referencing only the holdings in portfolio_impacts.  Falls back to
+    macro_takeaway when portfolio_impacts is empty, or to a deterministic template
+    when the LLM call fails.
+
+    Called from reduce_ticker_results_node (step 5) via lazy import.
+    """
+    if not portfolio_impacts:
+        return macro_takeaway
+
+    from georisk_agent.agents.archetypes import (
+        get_archetype,
+        get_ticker_archetype,
+        TICKER_ARCHETYPE_MAP,
+    )
+
+    archetype_id_by_ticker: dict[str, str] = {}
+    for eh in (enriched_portfolio or []):
+        t   = (eh.get("ticker") or "").upper()
+        aid = eh.get("archetype")
+        if t and aid:
+            archetype_id_by_ticker[t] = aid
+
+    bullish: list[dict] = []
+    neutral: list[dict] = []
+    bearish: list[dict] = []
+
+    for p in portfolio_impacts:
+        ticker  = (p.get("ticker") or "").upper()
+        verdict = p.get("verdict") or p.get("market_sentiment") or "Neutral"
+
+        aid = archetype_id_by_ticker.get(ticker)
+        if not aid:
+            fb  = get_ticker_archetype(ticker)
+            aid = fb.archetype_id if fb else None
+
+        rules        = get_archetype(aid) if aid else None
+        display_name = rules.display_name if rules else "Equity Holding"
+
+        if rules:
+            channels = [
+                _CHANNEL_DISPLAY.get(ch, ch.replace("-", " "))
+                for ch in rules.typical_exposure_channels[:3]
+            ]
+        else:
+            raw_ch   = (p.get("exposure_channel") or "macro-risk-sentiment").lower()
+            channels = [_CHANNEL_DISPLAY.get(raw_ch, raw_ch.replace("-", " "))]
+
+        causal = (p.get("causal_reasoning") or p.get("reasoning") or "")[:120].strip()
+        if causal and causal[-1] not in ".!?":
+            causal += "..."
+
+        spec = {
+            "ticker":       ticker,
+            "name":         p.get("name") or ticker,
+            "display_name": display_name,
+            "channels":     channels,
+            "causal":       causal,
+        }
+
+        if verdict == "Bullish":
+            bullish.append(spec)
+        elif verdict == "Bearish":
+            bearish.append(spec)
+        else:
+            neutral.append(spec)
+
+    def _fmt_group(label: str, specs: list[dict]) -> str:
+        if not specs:
+            return ""
+        parts = [f"[{label}]"]
+        for s in specs:
+            parts.append(
+                f"  - {s['ticker']} ({s['name']}) — {s['display_name']}\n"
+                f"    Mechanism: {', '.join(s['channels'])}\n"
+                f"    Causal hint: \"{s['causal']}\""
+            )
+        return "\n".join(parts)
+
+    portfolio_block = "\n\n".join(filter(None, [
+        _fmt_group("Direct beneficiaries (Bullish)", bullish),
+        _fmt_group("Neutral / balanced", neutral),
+        _fmt_group("Possible pressure (Bearish)", bearish),
+    ]))
+
+    prompt = (
+        f"Geopolitical event query: {query}\n\n"
+        "Portfolio holdings (ONLY these exist — NEVER mention any company, ticker, "
+        "ETF, or investment not in this list):\n\n"
+        f"{portfolio_block}\n\n"
+        "Write 3-6 investor takeaway bullets following these NON-NEGOTIABLE rules:\n"
+        "1. Open the FIRST bullet with 'If [brief event description] is credible,' "
+        "or 'In the event [brief event] materializes,'\n"
+        "2. Name each holding's SPECIFIC mechanism (use the mechanism labels above — "
+        "not generic 'semiconductor sector' or 'tech stocks').\n"
+        "3. Order: beneficiaries first, then neutral, then pressured holdings.\n"
+        "4. Use conditional language throughout: 'benefits through', 'may see', "
+        "'faces mild pressure via', 'sees indirect benefit from'.\n"
+        "5. Do NOT mention any company, index, ETF, or entity outside this portfolio.\n"
+        "6. Do NOT make broad sector allocation calls (e.g. 'increase tech exposure') "
+        "unless ALL portfolio holdings have the same verdict direction.\n"
+        "7. Keep each bullet to 1-2 sentences. Be mechanism-specific."
+    )
+
+    try:
+        output: PortfolioTakeaway = _takeaway_llm.invoke(prompt)
+        bullets = list(output.bullets)
+    except Exception as exc:
+        logger.warning("_build_portfolio_takeaway LLM call failed: %s", exc)
+        return _deterministic_takeaway_fallback(bullish, neutral, bearish, query)
+
+    if not bullets:
+        return _deterministic_takeaway_fallback(bullish, neutral, bearish, query)
+
+    # Post-generation guard: remove bullets that reference off-portfolio known tickers.
+    portfolio_tickers  = frozenset(s["ticker"] for s in bullish + neutral + bearish)
+    off_portfolio_known = frozenset(TICKER_ARCHETYPE_MAP) - portfolio_tickers
+    clean: list[str] = []
+    for b in bullets:
+        b_upper   = b.upper()
+        violators = [
+            t for t in off_portfolio_known
+            if re.search(rf"\b{re.escape(t)}\b", b_upper)
+        ]
+        if violators:
+            logger.warning(
+                "_build_portfolio_takeaway: removed bullet referencing off-portfolio "
+                "ticker(s) %s: %r",
+                violators, b[:80],
+            )
+        else:
+            clean.append(b)
+
+    if not clean:
+        logger.warning(
+            "_build_portfolio_takeaway: all LLM bullets removed by off-portfolio guard; "
+            "using deterministic fallback"
+        )
+        return _deterministic_takeaway_fallback(bullish, neutral, bearish, query)
+
+    return clean
 
 
 # -------------------------

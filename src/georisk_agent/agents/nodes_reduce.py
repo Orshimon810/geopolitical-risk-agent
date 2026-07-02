@@ -391,7 +391,10 @@ def reduce_ticker_results_node(state: DynamicAgentState) -> DynamicAgentState:
         )
 
     # Portfolio net synthesis (imported lazily to avoid circular imports at module load)
-    from georisk_agent.agents.nodes_analysis import _run_portfolio_net_synthesis
+    from georisk_agent.agents.nodes_analysis import (
+        _run_portfolio_net_synthesis,
+        _build_portfolio_takeaway,
+    )
 
     portfolio_net: Optional[dict] = None
     if ordered:
@@ -409,21 +412,44 @@ def reduce_ticker_results_node(state: DynamicAgentState) -> DynamicAgentState:
             portfolio_net.get("neutral_count", 0),
         )
 
+    # 5. Portfolio-aware investor takeaway — replaces the generic Phase 1 macro
+    #    takeaway with mechanism-specific, archetype-driven bullets built from the
+    #    finalized per-ticker verdicts.  Only runs when there is a non-empty portfolio.
+    #    Falls back to the original macro_takeaway on empty portfolio or LLM failure.
+    portfolio_takeaway_source = "macro"
+    if ordered:
+        portfolio_aware = _build_portfolio_takeaway(
+            portfolio_impacts=ordered,
+            enriched_portfolio=enriched_portfolio,
+            query=query,
+            macro_takeaway=investor_takeaway,
+        )
+        if portfolio_aware:
+            investor_takeaway = portfolio_aware
+            portfolio_takeaway_source = "portfolio_aware"
+            logger.info(
+                "reduce_ticker_results_node: investor_takeaway rewritten to %d "
+                "portfolio-aware bullet(s)",
+                len(investor_takeaway),
+            )
+
     return {
         **state,
-        "portfolio_impacts": ordered,
-        "portfolio_net":     portfolio_net,
+        "portfolio_impacts":  ordered,
+        "portfolio_net":      portfolio_net,
+        "investor_takeaway":  investor_takeaway,
         # Reset accumulator so a Reviewer RETRY cycle starts clean
-        "ticker_analyses":   [],
+        "ticker_analyses":    [],
         # Escalate numeric precision violations to user-visible data_gap flag.
         # The LLM system prompt already forbids unsupported ranges; this ensures
         # any violation that slips through is surfaced beyond the debug log.
         "data_gap": state.get("data_gap", False) or bool(numeric_violations),
         "debug": {
             **(state.get("debug") or {}),
-            "rule_results":              list(all_rule_results),
-            "risk_cap_log":              risk_cap_log,
-            "archetype_bounds_log":      [r["description"] for r in archetype_bounds_log],
+            "rule_results":                 list(all_rule_results),
+            "risk_cap_log":                 risk_cap_log,
+            "archetype_bounds_log":         [r["description"] for r in archetype_bounds_log],
             "numeric_precision_violations": numeric_violations,
+            "portfolio_takeaway_source":    portfolio_takeaway_source,
         },
     }
