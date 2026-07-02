@@ -12,6 +12,7 @@ No-op when portfolio_impacts is empty or absent.
 """
 
 import logging
+import re
 from typing import Literal, Optional
 
 from langchain_openai import ChatOpenAI
@@ -28,10 +29,35 @@ from georisk_agent.agents.verdict_rules import (
 logger = logging.getLogger(__name__)
 
 
+_STALE_VERDICT_RE = re.compile(
+    r"(?:The\s+)?(?:Neutral|Bullish|Bearish)\s+verdict\s+contradicts?\b[^.]*\.|"
+    r"As\s+(?:previously\s+)?(?:assessed|noted)\s+(?:as\s+)?(?:Neutral|Bullish|Bearish)\b[^.]*\.|"
+    r"The\s+(?:previous|old|prior|original)\s+(?:Neutral|Bullish|Bearish)\s+(?:verdict|assessment|stance)\b[^.]*\.|"
+    r"contradicts\s+(?:this|the)\s+(?:positive|negative|bullish|bearish)\s+sentiment\b[^.]*\.",
+    re.IGNORECASE,
+)
+
+
+def _strip_stale_verdict_refs(text: str | None) -> str | None:
+    if not text:
+        return text
+    return _STALE_VERDICT_RE.sub("", text).strip(" ,.;") or text
+
+
 class TickerCorrection(BaseModel):
     ticker: str
     corrected_verdict: Literal["Bullish", "Bearish", "Neutral"]
-    corrected_reasoning: str
+    corrected_reasoning: str = Field(
+        description=(
+            "Restate the causal reasoning for the CORRECTED verdict in clean, forward-looking "
+            "language. NEVER reference the old verdict label by name. "
+            "Forbidden phrases: 'The Neutral verdict contradicts', 'The Bearish verdict contradicts', "
+            "'As previously assessed as Bullish', 'The old Neutral assessment', "
+            "'contradicts this sentiment', or any equivalent meta-commentary about the old verdict. "
+            "Write as if the corrected verdict was always the conclusion — state the mechanism "
+            "and direction directly without referencing what the verdict used to be."
+        )
+    )
     contradiction_description: str
     corrected_short_term_analysis: Optional[str] = Field(
         default=None,
@@ -232,20 +258,24 @@ def consistency_validator_node(state: DynamicAgentState) -> DynamicAgentState:
             fix = correction_map[ticker_upper]
             corrected_p = dict(p)
             original_verdict = _verdict(p)
+            # Clean stale verdict references from all corrected text fields.
+            # The LLM may write "The Neutral verdict contradicts..." in corrected_reasoning
+            # even when instructed not to — this deterministic strip is the backstop.
+            clean_reasoning = _strip_stale_verdict_refs(fix.corrected_reasoning)
+            clean_st = _strip_stale_verdict_refs(fix.corrected_short_term_analysis)
+            clean_lt = _strip_stale_verdict_refs(fix.corrected_long_term_analysis)
             # Write both canonical and legacy keys for downstream compatibility
             corrected_p["market_sentiment"] = fix.corrected_verdict
             corrected_p["verdict"]          = fix.corrected_verdict
-            corrected_p["causal_reasoning"] = fix.corrected_reasoning
-            corrected_p["reasoning"]        = fix.corrected_reasoning
+            corrected_p["causal_reasoning"] = clean_reasoning
+            corrected_p["reasoning"]        = clean_reasoning
             # Rewrite analysis prose so final text always matches the new verdict.
-            # Without this, stale sentences like "The Neutral verdict contradicts..."
-            # remain visible to users after a Neutral→Bullish correction.
-            if fix.corrected_short_term_analysis:
-                corrected_p["short_term_analysis"] = fix.corrected_short_term_analysis
-                corrected_p["short_term_impact"]   = fix.corrected_short_term_analysis
-            if fix.corrected_long_term_analysis:
-                corrected_p["long_term_analysis"] = fix.corrected_long_term_analysis
-                corrected_p["long_term_impact"]   = fix.corrected_long_term_analysis
+            if clean_st:
+                corrected_p["short_term_analysis"] = clean_st
+                corrected_p["short_term_impact"]   = clean_st
+            if clean_lt:
+                corrected_p["long_term_analysis"] = clean_lt
+                corrected_p["long_term_impact"]   = clean_lt
             corrected_impacts.append(corrected_p)
             fixed_count += 1
             logger.info(

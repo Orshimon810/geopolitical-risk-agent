@@ -422,6 +422,22 @@ Any mandated baselines found in the query will be highlighted in the prompt unde
 Investor takeaway discipline:
 - Every recommendation must name a destination asset, not just an exit.
 - "Reduce X, increase Y" is the minimum acceptable format.
+- Each takeaway bullet MUST name a specific mechanism — generic sector calls are forbidden.
+  ✓ ALLOWED (mechanism-specific):
+    "Favor names directly exposed to reduced export-control risk (e.g. AI accelerator designers,
+     EUV equipment suppliers) — order-book and design-win visibility improve near-term."
+    "Treat broader tech and consumer names as indirect beneficiaries via supply-chain stability;
+     expect a smaller, slower sentiment lift than direct names."
+    "Defense contractors face reduced procurement urgency if de-escalation holds — maintain
+     existing positions but defer new additions pending policy confirmation."
+  ✗ FORBIDDEN (too generic):
+    "Increase exposure to semiconductor stocks" — names no mechanism.
+    "Buy ASML and TSMC" — names tickers without explaining why now.
+    "Reduce risk in defense" — no mechanism, no conditionality.
+- Tier the takeaway: (1) direct beneficiaries with named mechanism, then
+  (2) indirect beneficiaries with named pathway, then (3) names to monitor.
+- Use conditional framing: "IF [event/policy] holds, THEN favor X because [mechanism]."
+  Do NOT issue unconditional buy/sell instructions for geopolitical events.
 
 Confidence rules:
 - HIGH only if evidence is strong, consistent, historically validated,

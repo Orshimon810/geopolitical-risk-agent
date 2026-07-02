@@ -45,7 +45,22 @@ _TICKER_BUSINESS_MODEL_HINTS: dict[str, str] = {
         "China data-center demand (~20-25% of data center revenue pre-ban), "
         "hyperscaler capex timing (Azure/AWS/Google). "
         "Do NOT label as generic 'chip consumer' or 'semiconductor company.' "
+        "Do NOT use phrases like 'enhanced production capabilities', 'expanded manufacturing', "
+        "'fabrication ramp', or 'production capacity' for NVDA — it is fabless and does not "
+        "manufacture silicon. Only TSMC expands physical wafer output. "
         "primary_commodity=None."
+    ),
+    "AAPL": (
+        "Apple is a fabless chip designer (A-series, M-series) that outsources all "
+        "semiconductor fabrication to TSMC. economic_role=Consumer. "
+        "China revenue ~18-20% of total revenue (Apple's largest market outside USA). "
+        "For DE-ESCALATION / export-control EASING events: reduced US-China tech tension → "
+        "improved TSMC supply-chain reliability, lower China revenue risk premium, better "
+        "operating visibility in China. Verdict: Neutral to mildly Bullish. "
+        "For ESCALATION / CONFLICT events: China revenue at risk, TSMC Taiwan supply-chain "
+        "disruption risk. Verdict: Bearish. "
+        "Do NOT assign Bearish based on 'Chinese chip firms becoming more competitive' — "
+        "that is a 3-5 year structural risk, NOT a 3-12 month impact."
     ),
     "TSM": (
         "TSMC (TSM) is the world's largest pure-play contract semiconductor foundry. "
