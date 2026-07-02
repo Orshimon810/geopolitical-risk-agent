@@ -445,3 +445,126 @@ def extract_price_benchmarks(query: str) -> dict[str, str]:
                 break
 
     return benchmarks
+
+
+# ---------------------------------------------------------------------------
+# Numeric range scrubbing — shared utility
+# Called from nodes_analysis (macro fields) and nodes_reduce (ticker fields).
+# Replaces unsupported numeric patterns with qualitative equivalents so that
+# LLM violations of the NUMERIC PRECISION rule do not reach the user's UI.
+# ---------------------------------------------------------------------------
+
+_SCRUB_PCT_RANGE_RE = re.compile(
+    r'\b(\d+)\s*[-–]\s*(\d+)\s*%',
+    re.IGNORECASE,
+)
+
+_SCRUB_SINGLE_PCT_RE = re.compile(
+    r'\b(\d+(?:\.\d+)?)\s*%\s*(decline|compression|increase|rise|fall|drop|growth|impact|gain)',
+    re.IGNORECASE,
+)
+
+_SCRUB_TIME_RANGE_RE = re.compile(
+    r'\b(\d+)\s*[-–]\s*(\d+)\s*(months?|years?|weeks?|quarters?)\b',
+    re.IGNORECASE,
+)
+
+# Grounded fact patterns that must NOT be scrubbed even when they look like
+# unsupported ranges.  These are well-known structural constraints cited in the
+# system prompt (e.g., TSM capacity ramp, CoWoS lead times).
+_SCRUB_EXEMPT_RE = re.compile(
+    r'18\s*[-–]\s*36\s*months?'        # TSM capacity ramp grounded fact
+    r'|CoWoS'                           # Advanced packaging constraint
+    r'|procurement\s+cycle',            # Defense procurement lead times
+    re.IGNORECASE,
+)
+
+
+def _pct_qualifier(lo: int, hi: int) -> str:
+    avg = (lo + hi) / 2
+    if avg < 5:   return "modest"
+    if avg < 15:  return "material"
+    if avg < 30:  return "significant"
+    return "substantial"
+
+
+def _time_qualifier(lo: int, hi: int, unit: str) -> str:
+    unit = unit.lower()
+    if "week" in unit:
+        return "over the coming weeks"
+    if "month" in unit:
+        avg = (lo + hi) / 2
+        if avg <= 4:  return "near term"
+        if avg <= 9:  return "near to medium term"
+        return "medium term"
+    return "medium to longer term"   # years / quarters
+
+
+def _scrub_one(text: str) -> tuple[str, bool]:
+    """Scrub a single string; return (scrubbed, was_modified)."""
+    if not text:
+        return text, False
+
+    # Skip sentences that contain grounded-fact exemptions so that TSM
+    # capacity-ramp facts (18-36 months) are never erased.
+    sentences = re.split(r'(?<=[.!?])\s+', text)
+    clean_sentences = []
+    was_modified = False
+
+    for sent in sentences:
+        if _SCRUB_EXEMPT_RE.search(sent):
+            clean_sentences.append(sent)
+            continue
+
+        orig = sent
+
+        # Replace X-Y% → magnitude adjective
+        def _repl_pct_range(m: re.Match) -> str:
+            lo, hi = int(m.group(1)), int(m.group(2))
+            return _pct_qualifier(lo, hi)
+
+        sent = _SCRUB_PCT_RANGE_RE.sub(_repl_pct_range, sent)
+
+        # Replace N% [direction word] → [qualifier] [direction word]
+        def _repl_single_pct(m: re.Match) -> str:
+            val = float(m.group(1))
+            word = m.group(2)
+            if val < 5:   qual = "modest"
+            elif val < 15: qual = "material"
+            elif val < 30: qual = "significant"
+            else:          qual = "substantial"
+            return f"{qual} {word}"
+
+        sent = _SCRUB_SINGLE_PCT_RE.sub(_repl_single_pct, sent)
+
+        # Replace X-Y months/weeks/years → time qualifier
+        def _repl_time(m: re.Match) -> str:
+            lo, hi = int(m.group(1)), int(m.group(2))
+            return _time_qualifier(lo, hi, m.group(3))
+
+        sent = _SCRUB_TIME_RANGE_RE.sub(_repl_time, sent)
+
+        if sent != orig:
+            was_modified = True
+        clean_sentences.append(sent)
+
+    return " ".join(clean_sentences), was_modified
+
+
+def scrub_numeric_ranges(texts: list[str]) -> tuple[list[str], bool]:
+    """
+    Replace unsupported numeric range patterns in a list of text strings with
+    qualitative equivalents.  Grounded-fact patterns (18-36 months capacity ramp,
+    CoWoS) are exempt and never modified.
+
+    Returns (scrubbed_list, was_modified).  Call after LLM generation, before
+    returning state, to ensure no unsupported numbers reach the user's UI.
+    """
+    result: list[str] = []
+    any_modified = False
+    for t in texts:
+        scrubbed, modified = _scrub_one(t)
+        result.append(scrubbed)
+        if modified:
+            any_modified = True
+    return result, any_modified
