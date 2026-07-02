@@ -25,6 +25,7 @@ from georisk_agent.app.types import DynamicAgentState
 from georisk_agent.agents.verdict_rules import (
     enforce_asset_class_verdicts,
     enforce_defense_contractor_verdicts,
+    enforce_archetype_bounds,
     detect_takeaway_misalignments,
     scrub_numeric_ranges,
 )
@@ -335,6 +336,16 @@ def reduce_ticker_results_node(state: DynamicAgentState) -> DynamicAgentState:
             [r["description"] for r in defense_log],
         )
 
+    # 1c. Generalized archetype bounds: forbidden prose scrubbing + archetype verdict caps.
+    #     Runs after the specific ticker-list guard so any remaining violations are caught.
+    enriched_portfolio = state.get("enriched_portfolio") or []
+    ordered, archetype_bounds_log = enforce_archetype_bounds(ordered, enriched_portfolio)
+    if archetype_bounds_log:
+        logger.warning(
+            "reduce_ticker_results_node: archetype bounds applied %d correction(s): %s",
+            len(archetype_bounds_log), [r["description"] for r in archetype_bounds_log],
+        )
+
     # 2. Structural alignment: correct Bearish verdicts for tickers takeaway explicitly buys
     align_log: list = []
     if investor_takeaway:
@@ -345,7 +356,7 @@ def reduce_ticker_results_node(state: DynamicAgentState) -> DynamicAgentState:
                 len(align_log), [r["description"] for r in align_log],
             )
 
-    all_rule_results = enforce_log + defense_log + align_log
+    all_rule_results = enforce_log + defense_log + archetype_bounds_log + align_log
 
     # 3. Deterministic risk-score caps (RULE 9: channel + materiality ceiling)
     ordered, risk_cap_log = _apply_risk_score_caps(ordered, event_materiality)
@@ -412,6 +423,7 @@ def reduce_ticker_results_node(state: DynamicAgentState) -> DynamicAgentState:
             **(state.get("debug") or {}),
             "rule_results":              list(all_rule_results),
             "risk_cap_log":              risk_cap_log,
+            "archetype_bounds_log":      [r["description"] for r in archetype_bounds_log],
             "numeric_precision_violations": numeric_violations,
         },
     }

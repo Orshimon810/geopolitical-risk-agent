@@ -171,8 +171,8 @@ ARCHETYPE_REGISTRY: dict[str, ArchetypeRules] = {
         forbidden_prose_patterns=(
             r"\bnear.?term (capacity|output) (increase|ramp|expan)",
             r"\bimmediate (capacity|production|output)\b",
-            r"\bEUV (?:machine|equipment|tool)\b",
-            r"\blithography (?:machine|tool|supplier)\b",
+            r"\bEUV (?:machines?|equipment|tools?)\b",
+            r"\blithography (?:machines?|tools?|supplier)\b",
             r"\bsells? (?:lithography|equipment|machines?) to\b",
         ),
         event_sensitivities={
