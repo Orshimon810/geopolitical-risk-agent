@@ -97,6 +97,30 @@ _INDEX_TICKERS: frozenset[str] = frozenset({
     "SPY", "QQQ", "IWM", "DIA", "VTI", "EEM", "FEZ",
 })
 
+# ---------------------------------------------------------------------------
+# Prose-sync helper
+# ---------------------------------------------------------------------------
+
+def _sync_prose_to_verdict(p: dict, annotation: str) -> None:
+    """
+    Write annotation to all prose fields after a deterministic verdict override.
+
+    When a guard changes market_sentiment / verdict, the original LLM-generated
+    analysis prose may contradict the new verdict (e.g. VIX forced Bullish but
+    short_term_analysis still says "volatility expected to stay low").  This
+    helper replaces all four prose fields with the override annotation so the
+    final output is internally consistent.
+
+    Caller must have already made p a shallow copy before calling this.
+    Both canonical field names (short_term_analysis / long_term_analysis) and
+    their legacy aliases (short_term_impact / long_term_impact) are synced.
+    """
+    p["short_term_analysis"] = annotation
+    p["long_term_analysis"]  = annotation
+    p["short_term_impact"]   = annotation
+    p["long_term_impact"]    = annotation
+
+
 # Volatility instruments that move INVERSELY to equities.
 _VIX_TICKERS: frozenset[str] = frozenset({"^VIX", "VIX", "UVXY", "VXX"})
 
@@ -152,15 +176,27 @@ def enforce_asset_class_verdicts(
                 old_verdict = current_verdict
                 p["verdict"]          = "Bullish"
                 p["market_sentiment"] = "Bullish"
-                annotation = (
+                # Full annotation (with original reasoning preserved as context)
+                # is written to causal_reasoning / reasoning for audit purposes.
+                full_annotation = (
                     "[VIX inverse-correlation rule applied] "
                     + (p.get("reasoning") or p.get("causal_reasoning", ""))
                     + " The VIX moves inversely to equities; with other portfolio "
                     "holdings assessed as Bearish the market is in risk-off mode, "
                     "so VIX must be Bullish."
                 ).strip()
-                p["reasoning"]         = annotation
-                p["causal_reasoning"]  = annotation
+                p["reasoning"]         = full_annotation
+                p["causal_reasoning"]  = full_annotation
+                # Clean prose annotation for user-facing analysis fields.
+                # Does not embed the original stale reasoning so the prose
+                # is directionally consistent with the overridden Bullish verdict.
+                prose_annotation = (
+                    "[VIX inverse-correlation rule applied] "
+                    "The VIX moves inversely to equities; with other portfolio "
+                    "holdings assessed as Bearish the market is in risk-off mode, "
+                    "so VIX must be Bullish."
+                )
+                _sync_prose_to_verdict(p, prose_annotation)
                 desc = f"VIX override: {p.get('ticker')} {old_verdict} → Bullish (equity holdings are Bearish)"
                 rule_results.append(RuleResult(
                     ticker=p.get("ticker", ""),
@@ -287,7 +323,9 @@ def detect_takeaway_misalignments(
         p = result[idx]
         current = p.get("market_sentiment") or p.get("verdict", "Neutral")
         if current == "Bearish":
-            annotation = (
+            # Full annotation (with original reasoning preserved as context)
+            # is written to causal_reasoning / reasoning for audit purposes.
+            full_annotation = (
                 "[Takeaway-alignment correction] "
                 + (p.get("reasoning") or p.get("causal_reasoning", ""))
                 + " The investor takeaway explicitly recommends increasing exposure to "
@@ -297,8 +335,17 @@ def detect_takeaway_misalignments(
             ).strip()
             p["verdict"]          = "Bullish"
             p["market_sentiment"] = "Bullish"
-            p["reasoning"]        = annotation
-            p["causal_reasoning"] = annotation
+            p["reasoning"]        = full_annotation
+            p["causal_reasoning"] = full_annotation
+            # Clean prose annotation for user-facing analysis fields.
+            prose_annotation = (
+                "[Takeaway-alignment correction] "
+                "The investor takeaway explicitly recommends increasing exposure to "
+                "this ticker; a Bearish verdict contradicts that guidance. Likely cause: "
+                "commodity producer misclassified as a consumer — producers benefit from "
+                "commodity price spikes, not suffer from them."
+            )
+            _sync_prose_to_verdict(p, prose_annotation)
             desc = (
                 f"Takeaway alignment: {p.get('ticker')} Bearish → Bullish "
                 "(takeaway explicitly recommends buying this ticker)"
