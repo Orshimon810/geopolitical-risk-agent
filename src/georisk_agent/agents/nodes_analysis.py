@@ -1221,7 +1221,7 @@ Permitted sources (retrieved for this query):
     market_impacts,    _mi_dirty  = scrub_numeric_ranges(market_impacts[:6])
     risks,             _r_dirty   = scrub_numeric_ranges(risks[:4])
     scenarios,         _s_dirty   = scrub_numeric_ranges(scenarios[:3])
-    investor_takeaway, _it_dirty  = scrub_numeric_ranges(investor_takeaway[:1])
+    investor_takeaway, _it_dirty  = scrub_numeric_ranges(investor_takeaway)
     if _mi_dirty or _r_dirty or _s_dirty or _it_dirty:
         data_gap = True
         logger.warning(

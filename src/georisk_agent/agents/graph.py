@@ -20,6 +20,8 @@ Three factory functions are exported:
     evaluation/run_eval.py.
 """
 
+import logging
+
 from langgraph.graph import StateGraph, END
 from langgraph.types import Send
 
@@ -33,6 +35,9 @@ from georisk_agent.agents.nodes_ticker_analyst import ticker_analyst_node
 from georisk_agent.agents.nodes_reduce import reduce_ticker_results_node
 from georisk_agent.agents.nodes_consistency import consistency_validator_node
 from georisk_agent.agents.nodes_reviewer import reviewer_node, MAX_RETRIES_DEFAULT
+from georisk_agent.agents.verdict_rules import enforce_macro_confidence_risk_caps
+
+logger = logging.getLogger(__name__)
 
 
 def spawn_ticker_workers(state: DynamicAgentState):
@@ -104,8 +109,34 @@ def clarification_node(state: DynamicAgentState) -> DynamicAgentState:
 
 
 def final_output_node(state: DynamicAgentState) -> DynamicAgentState:
-    """Strip transient routing fields before the graph exits."""
-    return {k: v for k, v in state.items() if k != "reviewer_verdict"}
+    """
+    Strip transient routing fields and apply the final macro-confidence
+    consistency seal.
+
+    reviewer_node may downgrade state["confidence"] after reduce and CV have
+    already set per-ticker risk_score and portfolio_net.net_confidence.
+    enforce_macro_confidence_risk_caps re-aligns both fields against the
+    final calibrated macro confidence so the output is internally consistent.
+    """
+    macro_confidence = state.get("confidence", "Medium")
+    corrected_impacts, corrected_net, corrected_takeaway, cap_log = (
+        enforce_macro_confidence_risk_caps(
+            portfolio_impacts=state.get("portfolio_impacts") or [],
+            portfolio_net=state.get("portfolio_net"),
+            investor_takeaway=state.get("investor_takeaway") or [],
+            macro_confidence=macro_confidence,
+        )
+    )
+    if cap_log:
+        logger.info(
+            "final_output: macro confidence seal (%s): %s",
+            macro_confidence, cap_log,
+        )
+    out = {k: v for k, v in state.items() if k != "reviewer_verdict"}
+    out["portfolio_impacts"] = corrected_impacts
+    out["portfolio_net"]     = corrected_net
+    out["investor_takeaway"] = corrected_takeaway
+    return out
 
 
 def _add_rag_to_end(graph: StateGraph) -> None:

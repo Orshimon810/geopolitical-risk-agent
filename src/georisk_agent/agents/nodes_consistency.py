@@ -316,10 +316,30 @@ def consistency_validator_node(state: DynamicAgentState) -> DynamicAgentState:
         portfolio_net.get("neutral_count", 0),
     )
 
+    # Regenerate investor_takeaway when holdings were corrected so the final
+    # takeaway reflects post-CV verdicts, not the pre-CV snapshot from reduce.
+    # Only fires when fixed_count > 0 to avoid an unnecessary LLM call.
+    regenerated_takeaway = state.get("investor_takeaway") or []
+    if fixed_count > 0:
+        from georisk_agent.agents.nodes_analysis import _build_portfolio_takeaway
+        regen = _build_portfolio_takeaway(
+            portfolio_impacts=corrected_impacts,
+            enriched_portfolio=state.get("enriched_portfolio") or [],
+            query=state.get("query", ""),
+            macro_takeaway=state.get("investor_takeaway") or [],
+        )
+        if regen:
+            regenerated_takeaway = regen
+            logger.info(
+                "consistency_validator: investor_takeaway regenerated after %d correction(s)",
+                fixed_count,
+            )
+
     return {
         **state,
         "portfolio_impacts": corrected_impacts,
         "portfolio_net":     portfolio_net,
+        "investor_takeaway": regenerated_takeaway,
         "debug": {
             **(state.get("debug") or {}),
             "consistency_check": {
