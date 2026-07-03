@@ -24,6 +24,13 @@ Exported correction functions (called from nodes_reduce / nodes_consistency):
       Returns conflict description strings when macro-scenario polarity
       diverges from portfolio verdicts by more than 60%; does not mutate.
 
+  enforce_macro_confidence_risk_caps(impacts, portfolio_net, takeaway, macro_confidence)
+      — FINAL OUTPUT SEAL (called from final_output_node in graph.py):
+      Caps per-ticker risk_score and portfolio_net.net_confidence so neither
+      can exceed what the final reviewer-calibrated macro confidence supports.
+      Also prepends an insufficient-evidence disclaimer to investor_takeaway
+      when macro_confidence == "insufficient_data".
+
   extract_price_benchmarks(query) — UTILITY:
       Regex scan for explicit price anchors in the user query used as scenario
       baselines instead of the live market feed price.
@@ -840,3 +847,120 @@ def scrub_numeric_ranges(texts: list[str]) -> tuple[list[str], bool]:
         if modified:
             any_modified = True
     return result, any_modified
+
+
+# ---------------------------------------------------------------------------
+# Final macro-confidence → portfolio risk consistency seal
+# Called from final_output_node in graph.py after reviewer_node has
+# written the final calibrated macro confidence into state["confidence"].
+# ---------------------------------------------------------------------------
+
+INSUFFICIENT_DATA_DISCLAIMER = (
+    "[Insufficient evidence] Analysis is based on sparse or absent data — "
+    "treat all signals as speculative and defer position changes until "
+    "supporting evidence is available."
+)
+
+
+def enforce_macro_confidence_risk_caps(
+    portfolio_impacts: list[dict],
+    portfolio_net: dict | None,
+    investor_takeaway: list[str],
+    macro_confidence: str,
+) -> tuple[list[dict], dict | None, list[str], list[str]]:
+    """
+    Final consistency seal: cap per-ticker risk_score and portfolio_net.net_confidence
+    so neither can exceed what the final reviewer-calibrated macro confidence supports.
+
+    Each concern is guarded independently so the investor_takeaway disclaimer
+    fires even when portfolio_impacts is empty (macro-only queries).
+
+    Cap rules:
+      insufficient_data → risk_score forced to "Low"; net_confidence forced to
+                          "insufficient_data"; disclaimer prepended to takeaway.
+      Low               → risk_score "High" → "Medium"; net_confidence "High" → "Medium".
+      Medium            → net_confidence "High" → "Medium"; per-ticker risk_score unchanged.
+      High              → no-op.
+
+    Does NOT change verdict direction, market_sentiment, short_term_analysis,
+    long_term_analysis, short_term_impact, or long_term_impact.
+    When a per-ticker risk_score is capped, a short audit note is appended to
+    causal_reasoning (and reasoning if present); no other fields are modified.
+
+    Returns (corrected_impacts, corrected_portfolio_net, corrected_takeaway, log_messages).
+    Input dicts and lists are never mutated — the function operates on shallow copies.
+    """
+    log_messages: list[str] = []
+
+    # ── Step 1: investor_takeaway disclaimer ────────────────────────────────
+    # Always evaluated when macro_confidence == "insufficient_data", regardless
+    # of whether portfolio_impacts is empty (covers macro-only queries too).
+    corrected_takeaway: list[str] = list(investor_takeaway) if investor_takeaway else []
+    if macro_confidence == "insufficient_data":
+        already_present = (
+            bool(corrected_takeaway)
+            and corrected_takeaway[0].startswith("[Insufficient evidence]")
+        )
+        if not already_present:
+            corrected_takeaway = [INSUFFICIENT_DATA_DISCLAIMER] + corrected_takeaway
+            log_messages.append(
+                "investor_takeaway: insufficient-evidence disclaimer prepended"
+            )
+
+    # ── Step 2: per-ticker risk_score caps ──────────────────────────────────
+    # Skipped when portfolio_impacts is empty or None.
+    corrected_impacts: list[dict] = list(portfolio_impacts) if portfolio_impacts else []
+    if portfolio_impacts and macro_confidence in ("insufficient_data", "Low"):
+        capped: list[dict] = []
+        for p in portfolio_impacts:
+            risk_score = p.get("risk_score") or p.get("confidence", "Low")
+            ticker = p.get("ticker", "?")
+
+            if macro_confidence == "insufficient_data" and risk_score != "Low":
+                new_risk = "Low"
+                audit_note = " [risk_score capped: insufficient macro evidence]"
+            elif macro_confidence == "Low" and risk_score == "High":
+                new_risk = "Medium"
+                audit_note = " [risk_score capped High→Medium: macro confidence Low]"
+            else:
+                capped.append(p)
+                continue
+
+            p = dict(p)  # shallow copy — never mutate shared state dicts
+            p["risk_score"] = new_risk
+            p["confidence"] = new_risk  # legacy alias
+            for field in ("causal_reasoning", "reasoning"):
+                val = p.get(field)
+                if val:
+                    p[field] = val + audit_note
+            if not p.get("causal_reasoning") and not p.get("reasoning"):
+                p["causal_reasoning"] = audit_note.strip()
+            log_messages.append(
+                f"{ticker}: risk_score {risk_score}→{new_risk} "
+                f"(macro_confidence={macro_confidence})"
+            )
+            capped.append(p)
+        corrected_impacts = capped
+
+    # ── Step 3: portfolio_net confidence cap ────────────────────────────────
+    # Skipped when portfolio_net is None.
+    corrected_net: dict | None = portfolio_net
+    if portfolio_net is not None:
+        current_net_conf = portfolio_net.get("net_confidence")
+        new_net_conf = current_net_conf
+
+        if macro_confidence == "insufficient_data":
+            if current_net_conf != "insufficient_data":
+                new_net_conf = "insufficient_data"
+        elif macro_confidence in ("Low", "Medium") and current_net_conf == "High":
+            new_net_conf = "Medium"
+
+        if new_net_conf != current_net_conf:
+            corrected_net = dict(portfolio_net)
+            corrected_net["net_confidence"] = new_net_conf
+            log_messages.append(
+                f"portfolio_net.net_confidence: {current_net_conf}→{new_net_conf} "
+                f"(macro_confidence={macro_confidence})"
+            )
+
+    return corrected_impacts, corrected_net, corrected_takeaway, log_messages
