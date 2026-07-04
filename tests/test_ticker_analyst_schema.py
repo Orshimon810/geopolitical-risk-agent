@@ -26,6 +26,7 @@ EXPECTED_FIELD_ORDER = [
     "market_sentiment",
     "risk_score",
     "causal_reasoning",
+    "exposure_vectors",  # P2e: trade-policy exposure vectors (appended last, default=[])
 ]
 
 

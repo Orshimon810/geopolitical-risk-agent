@@ -155,5 +155,9 @@ class DynamicAgentState(TypedDict, total=False):
     # "high" | "moderate" | "low" — scope of the triggering event;
     # propagated to macro_context_node and ticker workers to gate risk_score defaults.
 
+    event_type: Optional[str]
+    # "trade_policy_tariff" or None — set by analysis_node; propagated through
+    # MacroEventContext to all ticker workers to enable event-specific guardrails.
+
     # ── Internal routing (stripped by final_output_node) ─────────────
     reviewer_verdict: str           # "PASS" | "RETRY"

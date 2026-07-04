@@ -192,6 +192,35 @@ def _classify_event_materiality(query: str, plan: list[str]) -> str:
     return "moderate"
 
 
+# ---------------------------------------------------------------------------
+# Event type pre-classification (P2e)
+# Identifies trade-policy-tariff events for exposure vector decomposition.
+# Pure regex — no LLM call; result written to state["event_type"] and
+# propagated to every ticker worker via MacroEventContext.
+# ---------------------------------------------------------------------------
+
+_TRADE_POLICY_TARIFF_RE = re.compile(
+    r'\b(tariff[s]?|import\s+dut(?:y|ies)|export\s+dut(?:y|ies)|'
+    r'customs\s+dut(?:y|ies)|anti[- ]?dumping|trade\s+barrier[s]?|'
+    r'trade\s+war[s]?|import\s+tariff[s]?|export\s+tariff[s]?|'
+    r'retaliatory\s+tariff[s]?|counter[- ]?tariff[s]?|'
+    r'protective\s+tariff[s]?)\b',
+    re.IGNORECASE,
+)
+
+
+def _classify_event_type(query: str) -> str | None:
+    """
+    Fast pre-classification of event type.
+    Returns 'trade_policy_tariff' when the query describes tariffs, import/export
+    duties, anti-dumping measures, or trade barriers.  Returns None for all other
+    event types.  Only trade_policy_tariff triggers RULE 10 vector decomposition.
+    """
+    if _TRADE_POLICY_TARIFF_RE.search(query):
+        return "trade_policy_tariff"
+    return None
+
+
 def _build_materiality_block(materiality: str) -> str:
     """Return a materiality constraint block to inject into the analysis prompt."""
     if materiality == "low":
@@ -972,6 +1001,46 @@ def _build_portfolio_takeaway(
         )
         return _deterministic_takeaway_fallback(bullish, neutral, bearish, query)
 
+    # Coverage gap-fill: ensure every portfolio holding appears in at least one bullet.
+    # Groups missing tickers by verdict direction (one sentence per group) to avoid
+    # inflating bullet count.
+    covered_tickers: set[str] = set()
+    for b in clean:
+        b_upper = b.upper()
+        for t in portfolio_tickers:
+            if re.search(rf"\b{re.escape(t)}\b", b_upper):
+                covered_tickers.add(t)
+
+    missing_tickers = portfolio_tickers - covered_tickers
+    if missing_tickers:
+        missing_bullish = [s["ticker"] for s in bullish if s["ticker"] in missing_tickers]
+        missing_neutral = [s["ticker"] for s in neutral if s["ticker"] in missing_tickers]
+        missing_bearish = [s["ticker"] for s in bearish if s["ticker"] in missing_tickers]
+
+        if missing_bullish:
+            tickers_str = ", ".join(missing_bullish)
+            clean.append(
+                f"{tickers_str}: positioned constructively under this event — "
+                "monitor for confirmation before adding exposure."
+            )
+        if missing_neutral:
+            tickers_str = ", ".join(missing_neutral)
+            clean.append(
+                f"{tickers_str}: no strong directional signal from current evidence — "
+                "hold existing positions and monitor for developments."
+            )
+        if missing_bearish:
+            tickers_str = ", ".join(missing_bearish)
+            clean.append(
+                f"{tickers_str}: facing potential headwinds under this event — "
+                "review position sizes if event confirms."
+            )
+
+        logger.info(
+            "_build_portfolio_takeaway: coverage gap-fill added for missing ticker(s): %s",
+            sorted(missing_tickers),
+        )
+
     return clean
 
 
@@ -1103,6 +1172,11 @@ def analysis_node(state: DynamicAgentState) -> DynamicAgentState:
     event_materiality = _classify_event_materiality(query, plan)
     materiality_block = _build_materiality_block(event_materiality)
     logger.info("analysis_node: event_materiality=%s", event_materiality)
+
+    # Event type classification — enables RULE 10 exposure vector decomposition
+    # for trade-policy-tariff events.  Pure regex; no LLM call.
+    event_type = _classify_event_type(query)
+    logger.info("analysis_node: event_type=%s", event_type)
 
     prompt = f"""
 You are a senior geopolitical risk analyst advising institutional investors.
@@ -1245,11 +1319,13 @@ Permitted sources (retrieved for this query):
         "sources":           sources,
         "impact_vectors":    impact_vectors,
         "event_materiality": event_materiality,
+        "event_type":        event_type,
         "debug": {
             **(state.get("debug") or {}),
             "analysis_reasoning":         output.reasoning,
             "analysis_structured_output": output.model_dump(),
             "event_polarity":             event_polarity,
             "event_materiality":          event_materiality,
+            "event_type":                 event_type,
         },
     }

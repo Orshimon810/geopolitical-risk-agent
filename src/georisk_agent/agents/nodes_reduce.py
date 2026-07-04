@@ -27,6 +27,7 @@ from georisk_agent.agents.verdict_rules import (
     enforce_defense_contractor_verdicts,
     enforce_archetype_bounds,
     detect_takeaway_misalignments,
+    apply_trade_policy_balanced_verdict,
     scrub_numeric_ranges,
 )
 
@@ -358,6 +359,16 @@ def reduce_ticker_results_node(state: DynamicAgentState) -> DynamicAgentState:
 
     all_rule_results = enforce_log + defense_log + archetype_bounds_log + align_log
 
+    # 2b. Trade-policy balanced verdict calibration (P2e guardrail 7).
+    #     Only fires when event_type == "trade_policy_tariff"; no-op otherwise.
+    event_type = state.get("event_type")
+    ordered, trade_calibration_log = apply_trade_policy_balanced_verdict(ordered, event_type)
+    if trade_calibration_log:
+        logger.info(
+            "reduce_ticker_results_node: trade_policy_balanced_verdict applied: %s",
+            trade_calibration_log,
+        )
+
     # 3. Deterministic risk-score caps (RULE 9: channel + materiality ceiling)
     ordered, risk_cap_log = _apply_risk_score_caps(ordered, event_materiality)
     if risk_cap_log:
@@ -446,10 +457,11 @@ def reduce_ticker_results_node(state: DynamicAgentState) -> DynamicAgentState:
         "data_gap": state.get("data_gap", False) or bool(numeric_violations),
         "debug": {
             **(state.get("debug") or {}),
-            "rule_results":                 list(all_rule_results),
-            "risk_cap_log":                 risk_cap_log,
-            "archetype_bounds_log":         [r["description"] for r in archetype_bounds_log],
-            "numeric_precision_violations": numeric_violations,
-            "portfolio_takeaway_source":    portfolio_takeaway_source,
+            "rule_results":                    list(all_rule_results),
+            "risk_cap_log":                    risk_cap_log,
+            "archetype_bounds_log":            [r["description"] for r in archetype_bounds_log],
+            "trade_calibration_log":           trade_calibration_log,
+            "numeric_precision_violations":    numeric_violations,
+            "portfolio_takeaway_source":       portfolio_takeaway_source,
         },
     }

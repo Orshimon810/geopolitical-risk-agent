@@ -26,6 +26,7 @@ from georisk_agent.app.config import settings
 from georisk_agent.app.types import TickerWorkerInput
 from georisk_agent.agents.schemas_portfolio import TickerHoldingAnalysis
 from georisk_agent.agents.archetypes import get_archetype
+from georisk_agent.agents.verdict_rules import _normalize_channel
 
 logger = logging.getLogger(__name__)
 
@@ -500,6 +501,18 @@ def _build_result_entry(result: TickerHoldingAnalysis) -> dict[str, Any]:
     short_term_analysis, long_term_analysis).
     """
     entry = result.model_dump()
+    # Normalize exposure_vectors channel names to canonical hyphenated format
+    # (LLM may emit underscores; calibration rules require hyphens).
+    raw_vectors = entry.get("exposure_vectors") or []
+    if raw_vectors:
+        normalized = []
+        for ev in raw_vectors:
+            ev = dict(ev)
+            ev["channel"] = _normalize_channel(ev.get("channel", "none"))
+            normalized.append(ev)
+        entry["exposure_vectors"] = normalized
+    else:
+        entry["exposure_vectors"] = []
     # Legacy aliases — do NOT remove until all consumers are migrated
     entry["verdict"]           = entry["market_sentiment"]
     entry["confidence"]        = entry["risk_score"]
@@ -592,9 +605,43 @@ def ticker_analyst_node(state: TickerWorkerInput) -> dict[str, Any]:
     event_certainty     = macro_context.get("event_certainty", "unknown")
     analysis_confidence = macro_context.get("analysis_confidence", "Medium")
     event_materiality   = macro_context.get("event_materiality", "moderate")
+    event_type          = macro_context.get("event_type")
 
     archetype_block = build_archetype_prompt_block(enriched_holding.get("archetype"))
     archetype_section = f"{archetype_block}\n" if archetype_block else ""
+
+    # RULE 10: inject exposure vector decomposition block for trade-policy-tariff events
+    rule_10_section = ""
+    if event_type == "trade_policy_tariff":
+        rule_10_section = (
+            "=== RULE 10: TRADE-POLICY TARIFF — EXPOSURE VECTOR DECOMPOSITION (NON-NEGOTIABLE) ===\n"
+            "The macro event is classified as trade_policy_tariff. BEFORE writing your verdict,\n"
+            "identify all material exposure channels for this holding.\n\n"
+            "CHANNELS to evaluate (use hyphenated names exactly as shown):\n"
+            "  competitive-position  — does this tariff protect or expose vs. foreign competitors?\n"
+            "  geographic-revenue    — does this firm have meaningful revenue or market access in the affected region?\n"
+            "  retaliation-risk      — could counter-tariffs or market-access restrictions harm this firm?\n"
+            "  input-cost            — does this tariff directly raise or lower a primary input cost?\n"
+            "  supply-chain-input    — does this tariff affect a 1-2 step upstream supplier?\n"
+            "  direct-operational    — does this tariff directly restrict or enable production/sales?\n"
+            "  indirect-demand       — does this tariff affect a downstream market that buys from this firm?\n\n"
+            "For EACH relevant channel, produce one ExposureVector with:\n"
+            "  channel:     one of the names above\n"
+            "  direction:   positive | negative | neutral | mixed\n"
+            "  materiality: none | low | medium | high\n"
+            "  confidence:  high | medium | low | insufficient_data\n"
+            "  rationale:   1-2 sentences citing the specific mechanism\n\n"
+            "MANDATORY:\n"
+            "- If the firm has meaningful or material revenue, operations, supply-chain, or market-access\n"
+            "  exposure to the tariff-target country, include a retaliation-risk or geographic-revenue\n"
+            "  vector. If not applicable, include a 'none' vector with rationale.\n"
+            "- If you identify BOTH a positive medium+ channel AND a negative medium+ channel,\n"
+            "  your verdict MUST be Neutral — never Bullish or Bearish.\n"
+            "- If ALL positive channels are indirect-demand with low materiality,\n"
+            "  your verdict MUST be Neutral — not Bullish.\n"
+            "- geographic-revenue pointing to China IS a negative channel for trade_policy_tariff events\n"
+            "  when China retaliation risk exists.\n\n"
+        )
 
     user_message = (
         f"=== MACRO EVENT CONTEXT ===\n"
@@ -619,6 +666,7 @@ def ticker_analyst_node(state: TickerWorkerInput) -> dict[str, Any]:
         f"Headquarters country: {enriched_holding.get('headquarters_country', 'Unknown')}\n"
         f"Current price: {_price_str(portfolio_price)}\n\n"
         f"{archetype_section}"
+        f"{rule_10_section}"
         f"=== INVESTOR TAKEAWAY (ALIGNMENT CONSTRAINT) ===\n"
         f"{takeaway_str}\n\n"
         f"Analyse how the macro event affects {ticker} ({name}). "
@@ -651,6 +699,7 @@ def ticker_analyst_node(state: TickerWorkerInput) -> dict[str, Any]:
                 market_sentiment=result.market_sentiment,
                 risk_score=result.risk_score,
                 causal_reasoning=result.causal_reasoning,
+                exposure_vectors=result.exposure_vectors,
             )
 
         entry = _build_result_entry(result)
