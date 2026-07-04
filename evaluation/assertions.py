@@ -220,6 +220,91 @@ def _extract_all_text(response: Dict[str, Any]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# P2e — Trade-policy exposure vector assertions (ASSERT_TRADE_004-006)
+# ---------------------------------------------------------------------------
+
+def assert_trade_exposure_vectors_present(response: Dict[str, Any]) -> AssertionResult:
+    """
+    ASSERT_TRADE_004: holdings with balanced positive medium+ AND negative medium+
+    vectors must have final verdict == Neutral (never Bullish or Bearish).
+    """
+    impacts = response.get("portfolio_impacts") or []
+    violations: list[str] = []
+    for p in impacts:
+        vectors = p.get("exposure_vectors") or []
+        if not vectors:
+            continue
+        has_pos_med = any(
+            v.get("direction") == "positive" and v.get("materiality") in ("medium", "high")
+            for v in vectors
+        )
+        has_neg_med = any(
+            v.get("direction") == "negative" and v.get("materiality") in ("medium", "high")
+            for v in vectors
+        )
+        if has_pos_med and has_neg_med:
+            verdict = p.get("market_sentiment") or p.get("verdict", "Neutral")
+            if verdict in ("Bullish", "Bearish"):
+                violations.append(
+                    f"{p.get('ticker', '?')}: balanced medium+ vectors but verdict={verdict}"
+                )
+    if violations:
+        return False, "ASSERT_TRADE_004: " + "; ".join(violations)
+    return True, "ASSERT_TRADE_004: all holdings with balanced medium+ vectors have Neutral verdict"
+
+
+def assert_trade_indirect_demand_not_bullish(response: Dict[str, Any]) -> AssertionResult:
+    """
+    ASSERT_TRADE_005: holdings where all positive-direction vectors are indirect-demand
+    (and none are high/high) must not be Bullish.
+    """
+    impacts = response.get("portfolio_impacts") or []
+    violations: list[str] = []
+    for p in impacts:
+        vectors = p.get("exposure_vectors") or []
+        if not vectors:
+            continue
+        positive_vecs = [v for v in vectors if v.get("direction") == "positive"]
+        if not positive_vecs:
+            continue
+        all_indirect = all(v.get("channel") == "indirect-demand" for v in positive_vecs)
+        has_high_high = any(
+            v.get("materiality") == "high" and v.get("confidence") == "high"
+            for v in positive_vecs
+        )
+        if all_indirect and not has_high_high:
+            verdict = p.get("market_sentiment") or p.get("verdict", "Neutral")
+            if verdict == "Bullish":
+                violations.append(
+                    f"{p.get('ticker', '?')}: indirect-demand-only positive vectors but verdict=Bullish"
+                )
+    if violations:
+        return False, "ASSERT_TRADE_005: " + "; ".join(violations)
+    return True, "ASSERT_TRADE_005: no indirect-demand-only holdings rated Bullish"
+
+
+def assert_trade_takeaway_covers_all_holdings(response: Dict[str, Any]) -> AssertionResult:
+    """
+    ASSERT_TRADE_006: investor_takeaway must mention every portfolio holding by ticker.
+    """
+    impacts = response.get("portfolio_impacts") or []
+    takeaway = response.get("investor_takeaway") or []
+    if not impacts or not takeaway:
+        return True, "ASSERT_TRADE_006: no portfolio or no takeaway — skipped"
+
+    combined = " ".join(takeaway).upper()
+    missing: list[str] = []
+    for p in impacts:
+        ticker = (p.get("ticker") or "").upper()
+        if ticker and not re.search(rf"\b{re.escape(ticker)}\b", combined):
+            missing.append(ticker)
+
+    if missing:
+        return False, f"ASSERT_TRADE_006: ticker(s) absent from investor_takeaway: {missing}"
+    return True, "ASSERT_TRADE_006: all portfolio tickers mentioned in investor_takeaway"
+
+
+# ---------------------------------------------------------------------------
 # Assertion registry
 # ---------------------------------------------------------------------------
 
@@ -250,6 +335,11 @@ FOCUS_ASSERTIONS: dict[str, list[tuple[str, Any]]] = {
     ],
     "signals": [
         ("H-D -- Web sources retrieved", assert_web_sources_retrieved),
+    ],
+    "trade_policy_tariff": [
+        ("TRADE-004 -- Balanced vectors → Neutral verdict",      assert_trade_exposure_vectors_present),
+        ("TRADE-005 -- Indirect-demand only → not Bullish",      assert_trade_indirect_demand_not_bullish),
+        ("TRADE-006 -- All holdings in investor_takeaway",       assert_trade_takeaway_covers_all_holdings),
     ],
 }
 

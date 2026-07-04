@@ -128,6 +128,15 @@ def _sync_prose_to_verdict(p: dict, annotation: str) -> None:
     p["long_term_impact"]    = annotation
 
 
+def _normalize_channel(ch: str) -> str:
+    """Normalize an exposure vector channel to canonical hyphenated format.
+
+    LLM output may use underscores (e.g. 'direct_operational').  The calibration
+    rules and Pydantic schema both require hyphens ('direct-operational').
+    """
+    return ch.strip().lower().replace("_", "-")
+
+
 # Volatility instruments that move INVERSELY to equities.
 _VIX_TICKERS: frozenset[str] = frozenset({"^VIX", "VIX", "UVXY", "VXX"})
 
@@ -328,6 +337,10 @@ def detect_takeaway_misalignments(
     result: list[dict] = [dict(p) for p in impacts]
     for idx in buy_recommended:
         p = result[idx]
+        # Respect trade-policy balanced-vector calibration — never flip a verdict
+        # that was set deterministically by _apply_trade_policy_balanced_verdict().
+        if p.get("balanced_vector_calibrated"):
+            continue
         current = p.get("market_sentiment") or p.get("verdict", "Neutral")
         if current == "Bearish":
             # Full annotation (with original reasoning preserved as context)
@@ -875,6 +888,241 @@ def enforce_archetype_bounds(
         corrected.append(p)
 
     return corrected, rule_results
+
+
+# ---------------------------------------------------------------------------
+# Trade-policy balanced verdict calibration (P2e guardrail 7)
+# ---------------------------------------------------------------------------
+
+_MATERIALITY_GE_MEDIUM: frozenset[str] = frozenset({"medium", "high"})
+_T10_ARCHETYPES: frozenset[str] = frozenset({"automaker", "ev_manufacturer"})
+_T11_ARCHETYPES: frozenset[str] = frozenset({"battery_or_lithium_supplier", "commodity_producer"})
+
+
+def _vecs_positive_medium_plus(vectors: list[dict]) -> bool:
+    return any(
+        v.get("direction") == "positive" and v.get("materiality") in _MATERIALITY_GE_MEDIUM
+        for v in vectors
+    )
+
+
+def _vecs_negative_medium_plus(vectors: list[dict]) -> bool:
+    return any(
+        v.get("direction") == "negative" and v.get("materiality") in _MATERIALITY_GE_MEDIUM
+        for v in vectors
+    )
+
+
+def apply_trade_policy_balanced_verdict(
+    impacts: list[dict],
+    event_type: str | None,
+) -> tuple[list[dict], list[str]]:
+    """
+    Deterministic balanced-verdict calibration for trade_policy_tariff events.
+
+    Only fires when event_type == 'trade_policy_tariff'.  No-op for all other
+    event types — zero behavioral change to non-tariff pipelines.
+
+    Rules evaluated in order (first match wins per holding):
+      T10 — automaker heuristic (competitive-position upside vs China retaliation)
+      T11 — commodity/materials supplier heuristic (indirect demand only)
+      T4  — balanced medium+ positive AND negative vectors
+      T5  — positive medium+ without direct high-confidence support
+      T6  — all positive vectors are low materiality
+      T7  — all positive vectors are indirect-demand (no high/high)
+      T9  — dominant negative high+ vector with no positive medium+
+
+    M1 invariant: every verdict override calls _sync_prose_to_verdict() immediately
+    on the shallow copy — no deferral to the consistency validator.
+
+    Protection flags set on each overridden holding:
+      balanced_vector_calibrated = True
+      balanced_vector_rule       = "T<N>"
+
+    Returns (corrected_impacts, log_messages).  Input dicts are never mutated.
+    """
+    if event_type != "trade_policy_tariff":
+        return impacts, []
+
+    log_messages: list[str] = []
+    result: list[dict] = []
+
+    for p in impacts:
+        vectors = p.get("exposure_vectors") or []
+
+        # T1: no vectors → no-op
+        if not vectors:
+            result.append(p)
+            continue
+
+        # T2: all channels are "none" → no-op
+        if all(v.get("channel") == "none" for v in vectors):
+            result.append(p)
+            continue
+
+        # T3: all confidences are "insufficient_data" → no-op
+        if all(v.get("confidence") == "insufficient_data" for v in vectors):
+            result.append(p)
+            continue
+
+        current_verdict = p.get("market_sentiment") or p.get("verdict", "Neutral")
+        archetype = p.get("archetype")
+        ticker = p.get("ticker", "?")
+
+        new_verdict: str | None = None
+        prose_annotation: str = ""
+        audit_note: str = ""
+        rule_id: str = ""
+
+        # ── T10: AUTOMAKER HEURISTIC ─────────────────────────────────────────
+        if archetype in _T10_ARCHETYPES:
+            has_comp_pos_medium = any(
+                v.get("channel") == "competitive-position"
+                and v.get("direction") == "positive"
+                and v.get("materiality") in _MATERIALITY_GE_MEDIUM
+                for v in vectors
+            )
+            has_china_neg_medium = any(
+                v.get("channel") in ("geographic-revenue", "retaliation-risk")
+                and v.get("direction") == "negative"
+                and v.get("materiality") in _MATERIALITY_GE_MEDIUM
+                and v.get("confidence") in ("high", "medium")
+                for v in vectors
+            )
+            if has_comp_pos_medium and has_china_neg_medium and current_verdict != "Neutral":
+                new_verdict = "Neutral"
+                prose_annotation = (
+                    "Verdict revised to Neutral: automaker with trade-policy competitive "
+                    "upside offset by material China revenue or retaliation risk — no single "
+                    "direction dominates at current evidence level."
+                )
+                audit_note = " [T10: automaker balanced-vector calibration]"
+                rule_id = "T10"
+
+        # ── T11: COMMODITY/MATERIALS SUPPLIER HEURISTIC ──────────────────────
+        if new_verdict is None and archetype in _T11_ARCHETYPES:
+            positive_vecs = [v for v in vectors if v.get("direction") == "positive"]
+            all_indirect = (
+                bool(positive_vecs)
+                and all(v.get("channel") == "indirect-demand" for v in positive_vecs)
+            )
+            if all_indirect and current_verdict == "Bullish":
+                new_verdict = "Neutral"
+                prose_annotation = (
+                    "Verdict revised to Neutral: commodity or materials supplier with "
+                    "indirect EV/downstream demand linkage only; direct demand or pricing "
+                    "evidence required for Bullish."
+                )
+                audit_note = " [T11: commodity supplier indirect demand only]"
+                rule_id = "T11"
+
+        # ── T4: balanced medium+ positive AND negative ────────────────────────
+        if new_verdict is None:
+            if (
+                _vecs_positive_medium_plus(vectors)
+                and _vecs_negative_medium_plus(vectors)
+                and current_verdict != "Neutral"
+            ):
+                new_verdict = "Neutral"
+                prose_annotation = (
+                    "Verdict revised to Neutral: balanced trade exposure — competing "
+                    "positive and negative vectors of similar materiality; neither "
+                    "direction dominates."
+                )
+                audit_note = " [T4: balanced medium+ positive and negative vectors]"
+                rule_id = "T4"
+
+        # ── T5: positive medium+ without direct high-confidence support ───────
+        if new_verdict is None:
+            has_pos_med = _vecs_positive_medium_plus(vectors)
+            has_neg_any = any(v.get("direction") == "negative" for v in vectors)
+            has_neg_med = _vecs_negative_medium_plus(vectors)
+            has_direct_high = any(
+                v.get("direction") == "positive"
+                and v.get("materiality") in _MATERIALITY_GE_MEDIUM
+                and v.get("channel") in ("direct-operational", "competitive-position")
+                and v.get("confidence") == "high"
+                for v in vectors
+            )
+            if has_pos_med and has_neg_any and not has_neg_med and not has_direct_high:
+                if current_verdict == "Bullish":
+                    new_verdict = "Neutral"
+                    prose_annotation = (
+                        "Verdict revised to Neutral: positive trade exposure is indirect or "
+                        "low-confidence; insufficient direct evidence for Bullish."
+                    )
+                    audit_note = " [T5: positive medium+ insufficient without direct high-confidence channel]"
+                    rule_id = "T5"
+
+        # ── T6: all positive vectors are low materiality ──────────────────────
+        if new_verdict is None and current_verdict == "Bullish":
+            positive_vecs = [v for v in vectors if v.get("direction") == "positive"]
+            if positive_vecs and all(
+                v.get("materiality") in ("none", "low") for v in positive_vecs
+            ):
+                new_verdict = "Neutral"
+                prose_annotation = (
+                    "Verdict revised to Neutral: all positive trade vectors are low "
+                    "materiality; insufficient direct exposure to support Bullish."
+                )
+                audit_note = " [T6: positive low only; capped at Neutral]"
+                rule_id = "T6"
+
+        # ── T7: all positive vectors are indirect-demand (no high/high) ───────
+        if new_verdict is None and current_verdict == "Bullish":
+            positive_vecs = [v for v in vectors if v.get("direction") == "positive"]
+            if positive_vecs and all(v.get("channel") == "indirect-demand" for v in positive_vecs):
+                has_high_high = any(
+                    v.get("materiality") == "high" and v.get("confidence") == "high"
+                    for v in positive_vecs
+                )
+                if not has_high_high:
+                    new_verdict = "Neutral"
+                    prose_annotation = (
+                        "Verdict revised to Neutral: positive exposure is through an indirect "
+                        "demand chain only; direct pricing or operational evidence is absent."
+                    )
+                    audit_note = " [T7: indirect demand only; capped at Neutral]"
+                    rule_id = "T7"
+
+        # ── T9: dominant negative high+ vector with no positive medium+ ───────
+        if new_verdict is None and current_verdict != "Bearish":
+            has_neg_high = any(
+                v.get("direction") == "negative" and v.get("materiality") == "high"
+                for v in vectors
+            )
+            if has_neg_high and not _vecs_positive_medium_plus(vectors):
+                new_verdict = "Bearish"
+                prose_annotation = (
+                    "Verdict revised to Bearish: dominant negative trade exposure with "
+                    "no material offsetting factors."
+                )
+                audit_note = " [T9: dominant negative vector]"
+                rule_id = "T9"
+
+        # ── Apply override ────────────────────────────────────────────────────
+        if new_verdict is not None:
+            p_copy = dict(p)
+            p_copy["verdict"]          = new_verdict
+            p_copy["market_sentiment"] = new_verdict
+            _sync_prose_to_verdict(p_copy, prose_annotation)
+            for field in ("causal_reasoning", "reasoning"):
+                val = p_copy.get(field) or ""
+                p_copy[field] = val + audit_note
+            p_copy["balanced_vector_calibrated"] = True
+            p_copy["balanced_vector_rule"]       = rule_id
+            log_messages.append(
+                f"{ticker}: {current_verdict}→{new_verdict} ({rule_id})"
+            )
+            logger.info(
+                "[TRADE_POLICY_BALANCED_VERDICT] %s: %s→%s (%s)",
+                ticker, current_verdict, new_verdict, rule_id,
+            )
+            result.append(p_copy)
+        else:
+            result.append(p)
+
+    return result, log_messages
 
 
 def scrub_numeric_ranges(texts: list[str]) -> tuple[list[str], bool]:

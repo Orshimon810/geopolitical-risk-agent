@@ -319,15 +319,17 @@ def macro_context_node(state: DynamicAgentState) -> DynamicAgentState:
         "     'unknown' — certainty not determinable from the query text."
     )
 
-    # Read current macro confidence and materiality so they are carried to all ticker workers.
-    # Both are set programmatically from state — never trusted from the LLM output.
+    # Read current macro confidence, materiality, and event_type so they are carried
+    # to all ticker workers.  All three are set programmatically from state —
+    # never trusted from the LLM output.
     macro_confidence   = state.get("confidence", "Medium")
     macro_materiality  = state.get("event_materiality", "moderate")
+    macro_event_type   = state.get("event_type")
 
     try:
         ctx: MacroEventContext = _macro_context_llm.invoke(prompt)
-        # Always rebuild to guarantee impact_vectors, analysis_confidence, and
-        # event_materiality are correct — they are overridden from state.
+        # Always rebuild to guarantee impact_vectors, analysis_confidence,
+        # event_materiality, and event_type are correct — overridden from state.
         ctx = MacroEventContext(
             event_summary=ctx.event_summary,
             affected_geographies=ctx.affected_geographies,
@@ -337,6 +339,7 @@ def macro_context_node(state: DynamicAgentState) -> DynamicAgentState:
             event_certainty=ctx.event_certainty,
             analysis_confidence=macro_confidence,
             event_materiality=macro_materiality,
+            event_type=macro_event_type,
         )
     except Exception as exc:
         logger.warning("macro_context_node: LLM call failed: %s — using fallback", exc)
@@ -349,6 +352,7 @@ def macro_context_node(state: DynamicAgentState) -> DynamicAgentState:
             event_certainty="unknown",
             analysis_confidence=macro_confidence,
             event_materiality=macro_materiality,
+            event_type=macro_event_type,
         )
 
     logger.info(
