@@ -28,6 +28,7 @@ from georisk_agent.agents.verdict_rules import (
     enforce_archetype_bounds,
     detect_takeaway_misalignments,
     apply_trade_policy_balanced_verdict,
+    enforce_low_materiality_no_exposure_neutrality,
     scrub_numeric_ranges,
 )
 
@@ -401,6 +402,30 @@ def reduce_ticker_results_node(state: DynamicAgentState) -> DynamicAgentState:
             ticker_scrub_log,
         )
 
+    # 4c. Low-materiality no-exposure neutrality seal — deterministic backstop for
+    #     directional verdicts on holdings whose own self-reported exposure_channel
+    #     is "none"/"macro-risk-sentiment" under a low-materiality event, after
+    #     geography/sector/commodity exclusion filters confirm no genuine linkage.
+    #     Fires AFTER the LLM call (unlike the ticker_analyst_node pre-LLM shortcut),
+    #     so it also catches cases where the shortcut declined to fire (e.g. the
+    #     holding's real enrichment geography intersected affected_geographies) but
+    #     the LLM's own self-reported exposure_channel still concedes no direct link.
+    macro_context = state.get("macro_context") or {}
+    ordered, low_materiality_neutralization_log = enforce_low_materiality_no_exposure_neutrality(
+        ordered,
+        event_materiality=event_materiality,
+        event_type=event_type,
+        macro_context=macro_context,
+    )
+    if low_materiality_neutralization_log:
+        logger.info(
+            "reduce_ticker_results_node: low-materiality no-exposure seal applied %d "
+            "correction(s): %s",
+            len(low_materiality_neutralization_log),
+            [r["description"] for r in low_materiality_neutralization_log],
+        )
+    all_rule_results = all_rule_results + low_materiality_neutralization_log
+
     # Portfolio net synthesis (imported lazily to avoid circular imports at module load)
     from georisk_agent.agents.nodes_analysis import (
         _run_portfolio_net_synthesis,
@@ -462,6 +487,9 @@ def reduce_ticker_results_node(state: DynamicAgentState) -> DynamicAgentState:
             "archetype_bounds_log":            [r["description"] for r in archetype_bounds_log],
             "trade_calibration_log":           trade_calibration_log,
             "numeric_precision_violations":    numeric_violations,
+            "low_materiality_neutralization_log": [
+                r["description"] for r in low_materiality_neutralization_log
+            ],
             "portfolio_takeaway_source":       portfolio_takeaway_source,
         },
     }

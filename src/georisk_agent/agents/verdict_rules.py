@@ -548,6 +548,23 @@ _SCRUB_EXEMPT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Post-scrub grammar fix: _SCRUB_PCT_RANGE_RE turns "rise by 10-15%" into the
+# grammatically broken "rise by material" (a bare adjective used as the object
+# of "by"). Convert to the adverb form and drop "by".
+_SCRUB_VERB_BY_QUALIFIER_RE = re.compile(
+    r'\b(rise|increase)\s+by\s+(material|significant)\b',
+    re.IGNORECASE,
+)
+_VERB_BY_QUALIFIER_ADVERB: dict[str, str] = {
+    "material": "materially",
+    "significant": "significantly",
+}
+
+
+def _repl_verb_by_qualifier(m: re.Match) -> str:
+    verb, qual = m.group(1), m.group(2).lower()
+    return f"{verb} {_VERB_BY_QUALIFIER_ADVERB[qual]}"
+
 
 def _pct_qualifier(lo: int, hi: int) -> str:
     avg = (lo + hi) / 2
@@ -621,6 +638,13 @@ def _scrub_one(text: str) -> tuple[str, bool]:
             return _time_qualifier(lo, hi, m.group(3))
 
         sent = _SCRUB_TIME_RANGE_RE.sub(_repl_time, sent)
+
+        # Fix grammatically broken "VERB by QUALIFIER" left behind when a
+        # percentage range like "rise by 10-15%" is scrubbed to "rise by
+        # material" (a bare adjective used ungrammatically as the object of
+        # "by"). Must run after _SCRUB_PCT_RANGE_RE, which produces the token
+        # this pattern matches against.
+        sent = _SCRUB_VERB_BY_QUALIFIER_RE.sub(_repl_verb_by_qualifier, sent)
 
         if sent != orig:
             was_modified = True
@@ -888,6 +912,171 @@ def enforce_archetype_bounds(
         corrected.append(p)
 
     return corrected, rule_results
+
+
+# ---------------------------------------------------------------------------
+# Low-materiality no-exposure neutrality seal (M2.5 follow-up)
+#
+# Deterministic post-LLM backstop: forces Neutral/Low for holdings whose own
+# self-reported exposure_channel already concedes "none"/"macro-risk-sentiment"
+# under a low-materiality event, but whose verdict is still Bullish/Bearish
+# (ticker-analyst LLM overreach on a weak macro-risk-sentiment story). This is
+# independent of — and runs after — the pre-LLM shortcut in
+# nodes_ticker_analyst.py (_should_use_low_materiality_no_exposure_shortcut),
+# so it also catches holdings that shortcut declined to skip (e.g. because
+# their real geographic footprint intersects affected_geographies) but whose
+# LLM-reported exposure_channel still concedes no direct mechanism.
+#
+# Geography/sector/commodity checks below are EXCLUSION filters only — a
+# holding is never neutralized if any of them indicate genuine linkage
+# (e.g. a wine producer, hospitality company, or holding sharing the event's
+# commodity/geography is always left untouched).
+# ---------------------------------------------------------------------------
+
+# Local mirrors of nodes_ticker_analyst.py's M2.5 shortcut constants/helper.
+# Duplicated (not imported) to avoid a circular import (nodes_ticker_analyst.py
+# already imports _normalize_channel from this module). Keep these two lists in
+# sync manually; if this relevance logic grows, extract both copies into a
+# shared module (e.g. relevance_rules.py) instead of maintaining duplicates.
+_LOW_MATERIALITY_SEAL_BLOCKED_EVENT_TYPES: frozenset[str] = frozenset({
+    "trade_policy_tariff",   # handled by P2e / RULE 10
+    "sanctions",
+    "export_controls",
+    "military_escalation",
+    "energy_shock",
+    "financial_sanctions",
+})
+
+_LOW_MATERIALITY_SEAL_BLOCKED_ARCHETYPES: frozenset[str] = frozenset({
+    "commodity_producer",
+    "commodity_consumer",
+})
+
+_LOW_MATERIALITY_SEAL_COMMODITY_ADJACENT_SECTORS: dict[str, frozenset[str]] = {
+    "wine":     frozenset({"alcohol", "beverage", "spirits", "vineyard", "hospitality",
+                           "restaurant", "tourism", "luxury", "food", "drink"}),
+    "alcohol":  frozenset({"wine", "beverage", "spirits", "hospitality", "restaurant",
+                           "food", "drink", "brewery", "distillery"}),
+    "beverage": frozenset({"wine", "alcohol", "drink", "hospitality", "restaurant", "food"}),
+    "food":     frozenset({"restaurant", "hospitality", "agriculture", "catering", "grocery"}),
+    "luxury":   frozenset({"premium", "brand", "fashion", "hospitality", "tourism",
+                           "retail", "goods"}),
+    "oil":      frozenset({"energy", "fuel", "petroleum", "refinery", "upstream", "downstream"}),
+    "gas":      frozenset({"energy", "lng", "utility", "pipeline"}),
+    "chip":     frozenset({"semiconductor", "electronics", "hardware", "processor"}),
+    "lithium":  frozenset({"battery", "electric", "mining", "mineral"}),
+    "steel":    frozenset({"metal", "manufacturing", "industrial", "iron"}),
+}
+
+
+def _seal_role_or_archetype_relevant(
+    economic_role: str | None,
+    archetype: str | None,
+    event_primary_commodity: str | None,
+) -> bool:
+    """
+    Mirrors nodes_ticker_analyst.py's _is_role_or_archetype_event_relevant
+    (event_summary param dropped — it's unused in the original function body too).
+    """
+    role_text = f"{economic_role or ''} {(archetype or '').replace('_', ' ')}".lower()
+    role_words = set(re.findall(r"\b[a-z]{3,}\b", role_text))
+    if not role_words:
+        return False
+
+    commodity_words = set(re.findall(r"\b[a-z]{3,}\b", (event_primary_commodity or "").lower()))
+
+    if commodity_words & role_words:
+        return True
+
+    expanded: set[str] = set(commodity_words)
+    for word in commodity_words:
+        expanded.update(_LOW_MATERIALITY_SEAL_COMMODITY_ADJACENT_SECTORS.get(word, frozenset()))
+    return bool(expanded & role_words)
+
+
+_LOW_MATERIALITY_NEUTRAL_ANNOTATION = (
+    "This low-materiality event has no identified direct geographic, operational, "
+    "supply-chain, sector, or commodity linkage to this holding. The final "
+    "assessment is Neutral / Low."
+)
+
+
+def enforce_low_materiality_no_exposure_neutrality(
+    impacts: list[dict],
+    event_materiality: str,
+    event_type: str | None,
+    macro_context: dict | None = None,
+) -> tuple[list[dict], list[RuleResult]]:
+    """
+    Deterministic backstop: force Neutral/Low for holdings whose own self-reported
+    exposure_channel already concedes "none"/"macro-risk-sentiment" under a
+    low-materiality event, but whose verdict is still Bullish/Bearish (LLM overreach).
+
+    Geography/sector/commodity checks are exclusion filters only — a holding is
+    never neutralized if any of them indicate genuine linkage.
+    """
+    if event_materiality != "low" or event_type in _LOW_MATERIALITY_SEAL_BLOCKED_EVENT_TYPES:
+        return impacts, []
+
+    macro_context = macro_context or {}
+    affected = {g.lower() for g in (macro_context.get("affected_geographies") or [])}
+    event_commodity = macro_context.get("primary_commodity_shock")
+
+    result: list[dict] = []
+    rule_results: list[RuleResult] = []
+
+    for p in impacts:
+        verdict = p.get("market_sentiment") or p.get("verdict", "Neutral")
+        channel = (p.get("exposure_channel") or "none").lower()
+
+        if verdict not in ("Bullish", "Bearish") or channel not in ("none", "macro-risk-sentiment"):
+            result.append(p)
+            continue
+
+        footprint          = {g.lower() for g in (p.get("geographic_asset_footprint") or [])}
+        archetype          = p.get("archetype")
+        economic_role       = p.get("economic_role", "Unrelated")
+        primary_commodity  = p.get("primary_commodity")
+
+        if (
+            affected & footprint
+            or _seal_role_or_archetype_relevant(economic_role, archetype, event_commodity)
+            or (primary_commodity and event_commodity
+                and primary_commodity.lower() == event_commodity.lower())
+            or (archetype in _LOW_MATERIALITY_SEAL_BLOCKED_ARCHETYPES and event_commodity)
+        ):
+            result.append(p)
+            continue
+
+        p = dict(p)
+        original_verdict = verdict
+        p["market_sentiment"]  = "Neutral"
+        p["verdict"]           = "Neutral"
+        p["risk_score"]        = "Low"
+        p["confidence"]        = "Low"
+        p["exposure_channel"]  = "none"
+        _sync_prose_to_verdict(p, _LOW_MATERIALITY_NEUTRAL_ANNOTATION)
+        p["causal_reasoning"]  = _LOW_MATERIALITY_NEUTRAL_ANNOTATION
+        p["reasoning"]         = _LOW_MATERIALITY_NEUTRAL_ANNOTATION
+        p["low_materiality_neutralized"] = True
+        p["low_materiality_rule"]        = "LOW_MATERIALITY_NO_EXPOSURE"
+
+        ticker = p.get("ticker", "?")
+        rule_results.append(RuleResult(
+            ticker=ticker,
+            rule_source="LOW_MATERIALITY_NO_EXPOSURE",
+            priority=int(RulePriority.STRUCTURAL),
+            original_verdict=original_verdict,
+            final_verdict="Neutral",
+            description=(
+                f"{ticker}: {original_verdict}→Neutral (low-materiality event, "
+                f"exposure_channel='{channel}', no geography/sector/commodity linkage)"
+            ),
+        ))
+        logger.info("[LOW_MATERIALITY_NO_EXPOSURE] %s", rule_results[-1]["description"])
+        result.append(p)
+
+    return result, rule_results
 
 
 # ---------------------------------------------------------------------------

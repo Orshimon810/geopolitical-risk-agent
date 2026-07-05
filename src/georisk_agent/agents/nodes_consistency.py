@@ -254,7 +254,19 @@ def consistency_validator_node(state: DynamicAgentState) -> DynamicAgentState:
     fixed_count = 0
     for p in portfolio_impacts:
         ticker_upper = (p.get("ticker") or "").upper()
-        if ticker_upper in correction_map:
+        if ticker_upper in correction_map and p.get("low_materiality_neutralized"):
+            # Protected by the low-materiality no-exposure seal (verdict_rules.py:
+            # enforce_low_materiality_no_exposure_neutrality). That seal exists to make
+            # this correction deterministic; letting the LLM-driven consistency check
+            # flip it back would silently defeat the seal, so skip applying the
+            # proposed correction for this holding.
+            logger.info(
+                "consistency_validator: skipping LLM correction for %s — protected by "
+                "low_materiality_neutralized seal (rule=%s)",
+                p.get("ticker"), p.get("low_materiality_rule"),
+            )
+            corrected_impacts.append(p)
+        elif ticker_upper in correction_map:
             fix = correction_map[ticker_upper]
             corrected_p = dict(p)
             original_verdict = _verdict(p)

@@ -851,6 +851,44 @@ def _deterministic_takeaway_fallback(
     return bullets
 
 
+def _all_holdings_low_materiality_neutralized(portfolio_impacts: list[dict]) -> bool:
+    """
+    True iff every holding is Neutral with no concrete exposure mechanism — either
+    because enforce_low_materiality_no_exposure_neutrality flagged it, or because it
+    already arrived Neutral/Low with exposure_channel "none"/"macro-risk-sentiment"
+    (e.g. from the ticker_analyst_node pre-LLM shortcut, which produces the same
+    no-exposure outcome but does not itself set the low_materiality_neutralized flag).
+    """
+    if not portfolio_impacts:
+        return False
+    for p in portfolio_impacts:
+        verdict = p.get("market_sentiment") or p.get("verdict", "Neutral")
+        if verdict != "Neutral":
+            return False
+        if p.get("low_materiality_neutralized"):
+            continue
+        channel = (p.get("exposure_channel") or "none").lower()
+        if channel not in ("none", "macro-risk-sentiment"):
+            return False
+    return True
+
+
+def _grounded_no_exposure_takeaway(portfolio_impacts: list[dict], query: str) -> list[str]:
+    """
+    Deterministic, single-bullet takeaway for the case where every holding was
+    neutralized by the low-materiality no-exposure seal (verdict_rules.py:
+    enforce_low_materiality_no_exposure_neutrality). Bypasses the LLM entirely —
+    there is nothing mechanism-specific to say when every holding is unlinked.
+    """
+    event_hint = (query[:80] + "...") if len(query) > 80 else query
+    tickers = ", ".join(p.get("ticker", "?") for p in portfolio_impacts)
+    return [
+        f"This portfolio has limited direct exposure to {event_hint}. Current evidence "
+        f"supports Neutral / Low treatment for {tickers} unless the dispute broadens "
+        "into a wider macro or trade shock."
+    ]
+
+
 def _build_portfolio_takeaway(
     portfolio_impacts: list[dict],
     enriched_portfolio: list[dict],
@@ -870,6 +908,9 @@ def _build_portfolio_takeaway(
     """
     if not portfolio_impacts:
         return macro_takeaway
+
+    if _all_holdings_low_materiality_neutralized(portfolio_impacts):
+        return _grounded_no_exposure_takeaway(portfolio_impacts, query)
 
     from georisk_agent.agents.archetypes import (
         get_archetype,
