@@ -543,6 +543,175 @@ def _placeholder_entry(ticker: str, name: str, reason: str) -> dict[str, Any]:
     return base
 
 
+def _failure_entry(ticker: str, name: str) -> dict[str, Any]:
+    """Sanitized fallback for LLM-call failures — no raw exception text exposed."""
+    _T = (
+        "Ticker-level analysis could not be completed. Based on the macro event "
+        "and available portfolio metadata, no direct exposure was established. "
+        "Treat this holding as Neutral / Low until analysis is retried."
+    )
+    base = {
+        "ticker":                     ticker,
+        "name":                       name,
+        "geographic_asset_footprint": [],
+        "economic_role":              "Unrelated",
+        "exposure_channel":           "none",
+        "short_term_analysis":        _T,
+        "long_term_analysis":         _T,
+        "market_sentiment":           "Neutral",
+        "risk_score":                 "Low",
+        "causal_reasoning":           _T,
+        "exposure_vectors":           [],
+    }
+    base["verdict"]           = base["market_sentiment"]
+    base["confidence"]        = base["risk_score"]
+    base["reasoning"]         = base["causal_reasoning"]
+    base["short_term_impact"] = base["short_term_analysis"]
+    base["long_term_impact"]  = base["long_term_analysis"]
+    return base
+
+
+# Blocked event types — shortcut must never fire for these.
+_SHORTCUT_BLOCKED_EVENT_TYPES: frozenset[str] = frozenset({
+    "trade_policy_tariff",   # handled by RULE 10 / P2e
+    "sanctions",
+    "export_controls",
+    "military_escalation",
+    "energy_shock",
+    "financial_sanctions",
+})
+
+# Commodity archetypes that may have indirect sensitivity to any commodity event.
+_SHORTCUT_BLOCKED_ARCHETYPES: frozenset[str] = frozenset({
+    "commodity_producer",
+    "commodity_consumer",
+})
+
+# Maps commodity/sector keywords → adjacent industry role keywords.
+# Catches indirect relevance (e.g. "wine" event → "hospitality" role is blocked).
+_COMMODITY_ADJACENT_SECTORS: dict[str, frozenset[str]] = {
+    "wine":     frozenset({"alcohol", "beverage", "spirits", "vineyard", "hospitality",
+                           "restaurant", "tourism", "luxury", "food", "drink"}),
+    "alcohol":  frozenset({"wine", "beverage", "spirits", "hospitality", "restaurant",
+                           "food", "drink", "brewery", "distillery"}),
+    "beverage": frozenset({"wine", "alcohol", "drink", "hospitality", "restaurant", "food"}),
+    "food":     frozenset({"restaurant", "hospitality", "agriculture", "catering", "grocery"}),
+    "luxury":   frozenset({"premium", "brand", "fashion", "hospitality", "tourism",
+                           "retail", "goods"}),
+    "oil":      frozenset({"energy", "fuel", "petroleum", "refinery", "upstream", "downstream"}),
+    "gas":      frozenset({"energy", "lng", "utility", "pipeline"}),
+    "chip":     frozenset({"semiconductor", "electronics", "hardware", "processor"}),
+    "lithium":  frozenset({"battery", "electric", "mining", "mineral"}),
+    "steel":    frozenset({"metal", "manufacturing", "industrial", "iron"}),
+}
+
+
+def _is_role_or_archetype_event_relevant(
+    economic_role: str | None,
+    archetype: str | None,
+    event_primary_commodity: str | None,
+    event_summary: str,
+) -> bool:
+    """
+    True if the holding's economic role or archetype has direct or adjacent-sector
+    relevance to the event commodity/sector.
+
+    Level 1: direct keyword overlap between economic_role/archetype and event commodity.
+    Level 2: commodity keywords expanded to adjacent sectors via _COMMODITY_ADJACENT_SECTORS
+             (e.g. "wine" → "hospitality", "tourism", "beverage").
+    """
+    role_text = f"{economic_role or ''} {(archetype or '').replace('_', ' ')}".lower()
+    role_words = set(re.findall(r"\b[a-z]{3,}\b", role_text))
+    if not role_words:
+        return False
+
+    commodity_words = set(re.findall(r"\b[a-z]{3,}\b",
+                                     (event_primary_commodity or "").lower()))
+
+    # Level 1: direct keyword overlap
+    if commodity_words & role_words:
+        return True
+
+    # Level 2: expand commodity to adjacent sectors
+    expanded: set[str] = set(commodity_words)
+    for word in commodity_words:
+        expanded.update(_COMMODITY_ADJACENT_SECTORS.get(word, frozenset()))
+    if expanded & role_words:
+        return True
+
+    return False
+
+
+def _should_use_low_materiality_no_exposure_shortcut(
+    event_materiality: str,
+    event_type: str | None,
+    affected_geographies: list[str],
+    geographic_asset_footprint: list[str],
+    economic_role: str,
+    primary_commodity: str | None,
+    event_primary_commodity: str | None,
+    archetype: str | None,
+    event_summary: str = "",
+) -> bool:
+    """
+    Conservative fast-path predicate. Returns True only when a Neutral/Low/none
+    result is deterministically clear and the LLM call can be safely skipped.
+    """
+    if event_materiality != "low":
+        return False
+    if event_type in _SHORTCUT_BLOCKED_EVENT_TYPES:
+        return False
+    # Geographic intersection (case-insensitive)
+    affected = {g.lower() for g in (affected_geographies or [])}
+    footprint = {g.lower() for g in (geographic_asset_footprint or [])}
+    if affected & footprint:
+        return False
+    # Role/archetype sector relevance — does NOT require exact "Unrelated" label
+    if _is_role_or_archetype_event_relevant(
+        economic_role=economic_role,
+        archetype=archetype,
+        event_primary_commodity=event_primary_commodity,
+        event_summary=event_summary,
+    ):
+        return False
+    # Holding's own commodity matches event commodity
+    if primary_commodity and event_primary_commodity:
+        if primary_commodity.lower() == event_primary_commodity.lower():
+            return False
+    # Commodity archetypes may have indirect sensitivity even without geographic match
+    if archetype in _SHORTCUT_BLOCKED_ARCHETYPES and event_primary_commodity:
+        return False
+    return True
+
+
+def _low_materiality_no_exposure_entry(ticker: str, name: str) -> dict[str, Any]:
+    """Deterministic Neutral/Low entry produced by the shortcut path."""
+    _REASON = (
+        "This low-materiality event has no identified direct geographic, operational, "
+        "supply-chain, or commodity linkage to this holding. Based on available portfolio "
+        "metadata, the position is assessed as Neutral / Low."
+    )
+    base = {
+        "ticker":                     ticker,
+        "name":                       name,
+        "geographic_asset_footprint": [],
+        "economic_role":              "Unrelated",
+        "exposure_channel":           "none",
+        "short_term_analysis":        _REASON,
+        "long_term_analysis":         _REASON,
+        "market_sentiment":           "Neutral",
+        "risk_score":                 "Low",
+        "causal_reasoning":           _REASON,
+        "exposure_vectors":           [],
+    }
+    base["verdict"]           = base["market_sentiment"]
+    base["confidence"]        = base["risk_score"]
+    base["reasoning"]         = base["causal_reasoning"]
+    base["short_term_impact"] = base["short_term_analysis"]
+    base["long_term_impact"]  = base["long_term_analysis"]
+    return base
+
+
 # ---------------------------------------------------------------------------
 # Node
 # ---------------------------------------------------------------------------
@@ -606,6 +775,26 @@ def ticker_analyst_node(state: TickerWorkerInput) -> dict[str, Any]:
     analysis_confidence = macro_context.get("analysis_confidence", "Medium")
     event_materiality   = macro_context.get("event_materiality", "moderate")
     event_type          = macro_context.get("event_type")
+
+    # Fix A: low-materiality no-exposure fast path — skip LLM for definitively
+    # unaffected holdings to save tokens and avoid spurious non-zero risk scores.
+    if _should_use_low_materiality_no_exposure_shortcut(
+        event_materiality=event_materiality,
+        event_type=event_type,
+        affected_geographies=macro_context.get("affected_geographies") or [],
+        geographic_asset_footprint=enriched_holding.get("geographic_asset_footprint") or [],
+        economic_role=enriched_holding.get("economic_role", "Unrelated"),
+        primary_commodity=enriched_holding.get("primary_commodity"),
+        event_primary_commodity=macro_context.get("primary_commodity_shock"),
+        archetype=enriched_holding.get("archetype"),
+        event_summary=macro_context.get("event_summary", ""),
+    ):
+        logger.info(
+            "ticker_analyst_node: %s — low-materiality no-exposure shortcut applied, "
+            "skipping LLM call",
+            ticker,
+        )
+        return {"ticker_analyses": [_low_materiality_no_exposure_entry(ticker, name)]}
 
     archetype_block = build_archetype_prompt_block(enriched_holding.get("archetype"))
     archetype_section = f"{archetype_block}\n" if archetype_block else ""
@@ -709,16 +898,9 @@ def ticker_analyst_node(state: TickerWorkerInput) -> dict[str, Any]:
             entry["exposure_channel"],
         )
 
-    except Exception as exc:
-        logger.error(
-            "ticker_analyst_node: LLM call failed for %s: %s",
-            ticker, exc, exc_info=True,
-        )
-        entry = _placeholder_entry(
-            ticker=ticker,
-            name=name,
-            reason=f"LLM analysis failed: {type(exc).__name__}",
-        )
+    except Exception:
+        logger.exception("ticker_analyst_node: LLM call failed for %s", ticker)
+        entry = _failure_entry(ticker=ticker, name=name)
 
     # Fan-out workers MUST return only the accumulator key
     return {"ticker_analyses": [entry]}
