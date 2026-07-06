@@ -448,3 +448,61 @@ fixture was updated to reflect the new bracket-free shape.
 
 No verdict, risk_score/confidence, P2e rule, consistency-validator, archetype, NVDA, or
 defense-contractor logic was touched. Full suite: 520 passed, 0 failed (516 + 4 new tests).
+
+---
+
+## 12. Phase 2A.6 — TSLA takeaway-alignment prose/template bug fix
+
+Manual QA on the EU Chinese EV tariffs benchmark found a hard contradiction: TSLA displayed
+`Bullish` while its "Reasoning" field still said "...the overall sentiment is Bearish...",
+carried a leaked `[Takeaway-alignment correction]` internal marker, and included a hardcoded
+"commodity producer misclassified as a consumer" explanation — factually wrong for Tesla, an
+EV manufacturer, not a commodity producer.
+
+**Root cause:** `detect_takeaway_misalignments()`'s Bearish→Bullish branch
+(`verdict_rules.py`) built a `full_annotation` for `causal_reasoning`/`reasoning` that
+literally embedded the pre-correction reasoning text verbatim before appending a fixed
+explanation, while the other four prose fields (`short_term_analysis`, `long_term_analysis`,
+and their `_impact` aliases) got a *different*, cleaner annotation via `_sync_prose_to_verdict`
+— two different sync paths for the same correction, one of which preserved stale text. The
+explanation text itself was a single hardcoded sentence assuming a commodity-producer
+scenario (apparently written against an ALB-like fixture), applied unconditionally to any
+ticker this rule touches.
+
+**Fix:** `causal_reasoning`/`reasoning` are now synced through the exact same
+`_sync_prose_to_verdict()` call as the other four fields — one clean, ticker-agnostic
+annotation for all six prose fields, no embedded stale text, no commodity-producer
+assumption. The `[Takeaway-alignment correction]` marker was moved out of the annotation and
+into the `RuleResult.description` / `logger.info()` call only — consistent with the Phase
+2A.5 precedent for P2e's `[T10:]`/`[T11:]` markers. `rule_results` (and therefore
+`debug.rule_results`) still records full detail: ticker, rule source
+(`STRUCTURAL_TAKEAWAY_ALIGNMENT`), original/final verdict, and a description that includes
+the `[Takeaway-alignment correction]` tag for log/debug searchability.
+
+Two existing tests that asserted the *old* bracket-in-prose behavior were updated to assert
+its *absence* instead, while preserving their original intent (proving prose actually gets
+re-synced, not left stale):
+`tests/test_commodity_supply_shock.py::TestTakeawayMisalignmentDetection::test_reasoning_annotated_on_correction`
+and `tests/test_reset_m1.py::TestTakeawayAlignmentProseSync::test_prose_contains_annotation_text_after_flip`.
+
+New regression coverage in
+`tests/test_verdict_rules.py::TestTakeawayAlignmentNonCommodityTicker` (6 tests) uses a
+TSLA-like fixture (ticker not a commodity producer) and asserts: the verdict flips correctly;
+no prose field retains the stale pre-flip Bearish conclusion; no prose field claims
+commodity-producer/misclassification status; no prose field contains the internal marker;
+`rule_results` still carries full audit detail; and all six prose fields are identical/
+consistent with each other (no more two-different-sync-paths divergence).
+
+**Deferred, not fixed (per explicit instruction), noted during diagnosis:**
+`detect_takeaway_misalignments()` (reduce step 2) runs *before* `apply_trade_policy_balanced_verdict`
+(P2e, reduce step 2b) in `nodes_reduce.py`. Its own `balanced_vector_calibrated` guard is
+consequently a no-op on this first call — that flag can't exist yet, since P2e hasn't run.
+This is a plausible (not confirmed without live debug output) explanation for why BMW.DE/VWAGY
+were also observed Bullish without visible T10 calibration in the same manual run: if their
+macro-level takeaway literally mentioned their tickers with a positive-signal word, this rule
+could flip them before P2e ever evaluated them. No ordering change was made — out of scope for
+this fix per instruction.
+
+No P2e calibration, `consistency_validator_node`, prompts, NVDA, defense-contractor, numeric
+scrubber, archetype, or risk-cap logic was touched, and no guardrail execution order changed.
+Full suite: 526 passed, 0 failed (520 + 6 new tests).

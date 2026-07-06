@@ -269,7 +269,12 @@ class TestTakeawayAlignmentProseSync:
         )
 
     def test_prose_contains_annotation_text_after_flip(self):
-        """All prose fields after a takeaway alignment flip must contain the correction annotation."""
+        """
+        All prose fields after a takeaway alignment flip must be re-synced to the
+        annotation (proving the flip actually replaced stale prose), and must NOT
+        contain the internal "[Takeaway-alignment correction]" marker (Phase 2A.6
+        — that marker is debug/rule_results-only, not user-facing).
+        """
         impacts = [
             _holding("ALB", "Bearish",
                      reasoning="cost headwinds",
@@ -279,8 +284,10 @@ class TestTakeawayAlignmentProseSync:
         takeaway = ["Accumulate ALB; producers benefit from lithium price spike."]
         result = self._run(impacts, takeaway)
         alb = result["ALB"]
-        assert "[Takeaway-alignment correction]" in alb["short_term_analysis"]
-        assert "[Takeaway-alignment correction]" in alb["long_term_analysis"]
+        assert alb["short_term_analysis"] != "Headwinds from input costs."
+        assert alb["long_term_analysis"] != "Sustained margin pressure."
+        assert "[Takeaway-alignment correction]" not in alb["short_term_analysis"]
+        assert "[Takeaway-alignment correction]" not in alb["long_term_analysis"]
 
     def test_neutral_or_bullish_holding_not_modified(self):
         """Neutral and Bullish holdings must not have prose replaced by the alignment guard."""

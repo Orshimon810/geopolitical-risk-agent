@@ -2,6 +2,7 @@ import pytest
 from georisk_agent.agents.verdict_rules import (
     enforce_asset_class_verdicts,
     enforce_defense_contractor_verdicts,
+    detect_takeaway_misalignments,
     extract_price_benchmarks,
     check_scenario_polarity,
     RulePriority,
@@ -384,3 +385,134 @@ class TestDefenseContractorDeEscalationGuard:
         result, rules = enforce_defense_contractor_verdicts(impacts)
         assert result[0]["market_sentiment"] == "Neutral"
         assert len(rules) == 1
+
+
+# ---------------------------------------------------------------------------
+# detect_takeaway_misalignments — TSLA-like regression (Phase 2A.6)
+#
+# Manual QA blocker: a non-commodity-producer ticker (Tesla) flipped from
+# Bearish to Bullish by this rule ended up with a "Reasoning" field that still
+# said "...the overall sentiment is Bearish...", plus a leaked internal
+# "[Takeaway-alignment correction]" marker and a hardcoded, factually wrong
+# "commodity producer misclassified as a consumer" explanation. This class
+# locks in the fix: generic explanation, no stale Bearish text, no internal
+# marker in user-facing prose, full detail preserved in rule_results.
+# ---------------------------------------------------------------------------
+
+def _tsla_like_holding(
+    ticker="TSLA",
+    verdict="Bearish",
+    reasoning="Given these factors, the overall sentiment is Bearish due to China retaliation risk.",
+) -> dict:
+    return {
+        "ticker": ticker,
+        "name": "Tesla, Inc.",
+        "verdict": verdict,
+        "market_sentiment": verdict,
+        "reasoning": reasoning,
+        "causal_reasoning": reasoning,
+        "short_term_analysis": reasoning,
+        "long_term_analysis": reasoning,
+        "short_term_impact": reasoning,
+        "long_term_impact": reasoning,
+        "confidence": "Medium",
+        "risk_score": "Medium",
+        "archetype": "ev_manufacturer",
+        "economic_role": "Mixed",
+    }
+
+
+class TestTakeawayAlignmentNonCommodityTicker:
+
+    def test_verdict_flips_to_bullish(self):
+        impacts = [_tsla_like_holding()]
+        takeaway = ["Increase exposure to TSLA amid EU tariff-driven competitive upside."]
+        result, _ = detect_takeaway_misalignments(impacts, takeaway)
+        assert result[0]["verdict"] == "Bullish"
+        assert result[0]["market_sentiment"] == "Bullish"
+
+    def test_no_prose_field_still_says_bearish(self):
+        """
+        No user-facing prose field may still contain the OLD, stale pre-flip
+        reasoning text (which concluded Bearish). The new annotation legitimately
+        references "an initial Bearish assessment" descriptively while explaining
+        the correction — that is not stale/contradictory, the same way P2e's
+        annotations legitimately use the word "Bullish" descriptively (e.g.
+        "...insufficient evidence for Bullish"). What must NOT survive is the
+        holding's own original conclusion, verbatim.
+        """
+        stale_original_text = (
+            "Given these factors, the overall sentiment is Bearish due to China "
+            "retaliation risk."
+        )
+        impacts = [_tsla_like_holding(reasoning=stale_original_text)]
+        takeaway = ["Increase exposure to TSLA amid EU tariff-driven competitive upside."]
+        result, _ = detect_takeaway_misalignments(impacts, takeaway)
+        p = result[0]
+        for field in (
+            "short_term_analysis", "long_term_analysis",
+            "short_term_impact", "long_term_impact",
+            "causal_reasoning", "reasoning",
+        ):
+            text = p[field]
+            assert stale_original_text not in text, (
+                f"{field} still embeds the stale pre-flip reasoning: {text!r}"
+            )
+            assert "overall sentiment is bearish" not in text.lower(), (
+                f"{field} still asserts the old Bearish conclusion: {text!r}"
+            )
+
+    def test_no_commodity_producer_wording_for_non_producer_ticker(self):
+        """Tesla is not a commodity producer — the correction text must not claim it is."""
+        impacts = [_tsla_like_holding()]
+        takeaway = ["Increase exposure to TSLA amid EU tariff-driven competitive upside."]
+        result, _ = detect_takeaway_misalignments(impacts, takeaway)
+        p = result[0]
+        for field in (
+            "short_term_analysis", "long_term_analysis",
+            "short_term_impact", "long_term_impact",
+            "causal_reasoning", "reasoning",
+        ):
+            text = p[field].lower()
+            assert "commodity producer" not in text, f"{field} wrongly claims commodity-producer status: {p[field]!r}"
+            assert "misclassified" not in text, f"{field} wrongly claims misclassification: {p[field]!r}"
+
+    def test_no_internal_marker_in_user_facing_prose(self):
+        """The internal '[Takeaway-alignment correction]' marker must not leak into displayed prose."""
+        impacts = [_tsla_like_holding()]
+        takeaway = ["Increase exposure to TSLA amid EU tariff-driven competitive upside."]
+        result, _ = detect_takeaway_misalignments(impacts, takeaway)
+        p = result[0]
+        for field in (
+            "short_term_analysis", "long_term_analysis",
+            "short_term_impact", "long_term_impact",
+            "causal_reasoning", "reasoning",
+        ):
+            assert "[Takeaway-alignment correction]" not in p[field], (
+                f"{field} still contains the internal marker: {p[field]!r}"
+            )
+
+    def test_rule_results_still_records_full_detail(self):
+        """Debug visibility must be preserved via RuleResult even though prose is clean."""
+        impacts = [_tsla_like_holding()]
+        takeaway = ["Increase exposure to TSLA amid EU tariff-driven competitive upside."]
+        result, rule_results = detect_takeaway_misalignments(impacts, takeaway)
+        assert len(rule_results) == 1
+        r = rule_results[0]
+        assert r["ticker"] == "TSLA"
+        assert r["rule_source"] == "STRUCTURAL_TAKEAWAY_ALIGNMENT"
+        assert r["original_verdict"] == "Bearish"
+        assert r["final_verdict"] == "Bullish"
+        assert "[Takeaway-alignment correction]" in r["description"]
+        assert "TSLA" in r["description"]
+
+    def test_all_six_prose_fields_identical_and_consistent(self):
+        """All six fields must be re-synced to the same clean annotation — no divergence."""
+        impacts = [_tsla_like_holding()]
+        takeaway = ["Increase exposure to TSLA amid EU tariff-driven competitive upside."]
+        result, _ = detect_takeaway_misalignments(impacts, takeaway)
+        p = result[0]
+        assert p["short_term_analysis"] == p["short_term_impact"]
+        assert p["long_term_analysis"] == p["long_term_impact"]
+        assert p["causal_reasoning"] == p["reasoning"]
+        assert p["short_term_analysis"] == p["causal_reasoning"]
