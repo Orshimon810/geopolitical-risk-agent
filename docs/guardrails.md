@@ -413,3 +413,38 @@ content. Two supporting facts:
   alone — a heuristic that is more likely to remove legitimate content than to improve
   presentation. Per the task's own instruction ("if deduplication is risky, do not implement
   it; just report why and leave it documented"), this is deferred, not implemented.
+
+---
+
+## 11. Phase 2A.5 — internal guardrail audit markers hidden from user-facing prose
+
+Manual QA confirmed P2e calibration fires correctly (e.g. VWAGY correctly capped to Neutral),
+but the bracketed `[T10: automaker balanced-vector calibration]` / `[T11: ...]` internal audit
+marker was leaking into the user-facing "Reasoning" text.
+
+**Fix:** in `apply_trade_policy_balanced_verdict()` (`verdict_rules.py`), the per-rule
+`audit_note` (the bracketed marker, e.g. `" [T10: automaker balanced-vector calibration]"`)
+is no longer appended to `causal_reasoning`/`reasoning` — those are the two fields rendered as
+"Reasoning" in the UI (`ResultsDisplay.tsx`'s `PortfolioImpactCard`). Nothing else about the
+override changed: `_sync_prose_to_verdict()` still runs identically for the four
+analysis/impact fields, and `balanced_vector_calibrated` / `balanced_vector_rule` are set
+exactly as before. The debug log line (`log_messages`, surfaced as
+`debug.trade_calibration_log`) now appends the full `audit_note` text as well, so the
+human-readable rule note is still fully visible in the debug trail — it's just no longer
+duplicated into displayed prose.
+
+Verified byte-for-byte against the task's own example: given reasoning text ending in "...the
+overall sentiment is Neutral with a Medium risk score.", the calibrated output is exactly that
+sentence, unchanged, with no trailing bracket.
+
+New tests in `tests/test_p2e_trade_policy.py::TestUserFacingProseHidesInternalMarkers` assert,
+for T10, T11, and a sweep across T4/T6/T7/T9/T10/T11, that none of the six prose fields
+(`short_term_analysis`, `long_term_analysis`, `short_term_impact`, `long_term_impact`,
+`causal_reasoning`, `reasoning`) contain a `\[T\d+:` pattern after calibration, while
+`balanced_vector_rule`, `balanced_vector_calibrated`, and the debug log remain correct. The EU
+Chinese EV tariffs benchmark snapshot (`tests/test_phase2a_benchmark_snapshots.py`) was updated
+with the same assertion at the real reduce-node level, and its `TestBalancedVectorCalibratedConsistencyProtection`
+fixture was updated to reflect the new bracket-free shape.
+
+No verdict, risk_score/confidence, P2e rule, consistency-validator, archetype, NVDA, or
+defense-contractor logic was touched. Full suite: 520 passed, 0 failed (516 + 4 new tests).
