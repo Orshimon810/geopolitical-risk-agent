@@ -667,3 +667,116 @@ class TestArchetypeResolutionFromEnrichedPortfolio:
 
         assert result[0]["verdict"] == "Neutral"
         assert result[0]["balanced_vector_rule"] == "T10"
+
+
+# ===========================================================================
+# TestUserFacingProseHidesInternalMarkers (Phase 2A.5)
+#
+# Manual QA confirmed P2e calibration fires correctly, but the bracketed
+# "[T10: ...]"/"[T11: ...]" internal audit marker was leaking into the
+# user-facing "Reasoning" text (causal_reasoning/reasoning). This must be
+# hidden from displayed prose while balanced_vector_rule,
+# balanced_vector_calibrated, and the debug log trail remain unchanged.
+# ===========================================================================
+
+_PROSE_FIELDS = (
+    "short_term_analysis", "long_term_analysis",
+    "short_term_impact", "long_term_impact",
+    "causal_reasoning", "reasoning",
+)
+
+
+class TestUserFacingProseHidesInternalMarkers:
+
+    def test_T10_bracket_marker_absent_from_all_prose_fields(self):
+        vectors = [
+            _make_vector("competitive-position", "positive", "medium", "high"),
+            _make_vector("geographic-revenue", "negative", "medium", "high"),
+        ]
+        impact = _make_impact(ticker="BMW", verdict="Bullish", vectors=vectors, archetype="automaker")
+
+        result, log = apply_trade_policy_balanced_verdict([impact], "trade_policy_tariff")
+        p = result[0]
+
+        for field in _PROSE_FIELDS:
+            text = p.get(field) or ""
+            assert "[T10:" not in text, f"{field} still contains internal marker: {text!r}"
+            assert not re.search(r"\[T\d+:", text), f"{field} contains a bracketed T-rule marker: {text!r}"
+
+        # Structured fields and debug/log trail must be unchanged.
+        assert p["balanced_vector_calibrated"] is True
+        assert p["balanced_vector_rule"] == "T10"
+        assert log and "T10" in log[0], "debug log must still record which rule fired"
+
+    def test_T11_bracket_marker_absent_from_all_prose_fields(self):
+        vectors = [
+            _make_vector("indirect-demand", "positive", "medium", "medium"),
+        ]
+        impact = _make_impact(
+            ticker="ALB", verdict="Bullish", vectors=vectors,
+            archetype="battery_or_lithium_supplier",
+        )
+
+        result, log = apply_trade_policy_balanced_verdict([impact], "trade_policy_tariff")
+        p = result[0]
+
+        for field in _PROSE_FIELDS:
+            text = p.get(field) or ""
+            assert "[T11:" not in text, f"{field} still contains internal marker: {text!r}"
+            assert not re.search(r"\[T\d+:", text), f"{field} contains a bracketed T-rule marker: {text!r}"
+
+        assert p["balanced_vector_calibrated"] is True
+        assert p["balanced_vector_rule"] == "T11"
+        assert log and "T11" in log[0]
+
+    def test_no_bracket_marker_across_all_T_rules(self):
+        """Sweep T4/T5/T6/T7/T9/T10/T11 — none should leak a bracket into prose."""
+        cases = [
+            ("T4", _make_impact("X4", "Bullish",
+                [_make_vector("competitive-position", "positive", "medium"),
+                 _make_vector("retaliation-risk", "negative", "medium")], archetype=None)),
+            ("T6", _make_impact("X6", "Bullish",
+                [_make_vector("competitive-position", "positive", "low")], archetype=None)),
+            ("T7", _make_impact("X7", "Bullish",
+                [_make_vector("indirect-demand", "positive", "medium", "medium")], archetype=None)),
+            ("T9", _make_impact("X9", "Neutral",
+                [_make_vector("geographic-revenue", "negative", "high")], archetype=None)),
+            ("T10", _make_impact("BMW", "Bullish",
+                [_make_vector("competitive-position", "positive", "medium", "high"),
+                 _make_vector("geographic-revenue", "negative", "medium", "high")], archetype="automaker")),
+            ("T11", _make_impact("ALB", "Bullish",
+                [_make_vector("indirect-demand", "positive", "medium", "medium")],
+                archetype="battery_or_lithium_supplier")),
+        ]
+        for expected_rule, impact in cases:
+            result, _ = apply_trade_policy_balanced_verdict([impact], "trade_policy_tariff")
+            p = result[0]
+            if not p.get("balanced_vector_calibrated"):
+                continue  # this fixture didn't trigger a calibration; nothing to check
+            for field in _PROSE_FIELDS:
+                text = p.get(field) or ""
+                assert not re.search(r"\[T\d+:", text), (
+                    f"{p['ticker']} ({p.get('balanced_vector_rule')}).{field} "
+                    f"contains a bracketed T-rule marker: {text!r}"
+                )
+
+    def test_calibrated_impact_dict_still_carries_full_structured_data(self):
+        """
+        Removing the prose marker must not touch balanced_vector_rule,
+        balanced_vector_calibrated, or the debug log — only display text changes.
+        """
+        vectors = [
+            _make_vector("competitive-position", "positive", "medium", "high"),
+            _make_vector("geographic-revenue", "negative", "medium", "high"),
+        ]
+        impact = _make_impact(ticker="BMW", verdict="Bullish", vectors=vectors, archetype="automaker")
+
+        result, log = apply_trade_policy_balanced_verdict([impact], "trade_policy_tariff")
+        p = result[0]
+
+        assert p["verdict"] == "Neutral"
+        assert p["market_sentiment"] == "Neutral"
+        assert p["balanced_vector_calibrated"] is True
+        assert p["balanced_vector_rule"] == "T10"
+        assert len(log) == 1
+        assert "BMW" in log[0] and "T10" in log[0]
