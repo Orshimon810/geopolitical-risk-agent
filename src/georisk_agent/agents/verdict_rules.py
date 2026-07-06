@@ -343,31 +343,26 @@ def detect_takeaway_misalignments(
             continue
         current = p.get("market_sentiment") or p.get("verdict", "Neutral")
         if current == "Bearish":
-            # Full annotation (with original reasoning preserved as context)
-            # is written to causal_reasoning / reasoning for audit purposes.
-            full_annotation = (
-                "[Takeaway-alignment correction] "
-                + (p.get("reasoning") or p.get("causal_reasoning", ""))
-                + " The investor takeaway explicitly recommends increasing exposure to "
-                "this ticker; a Bearish verdict contradicts that guidance. Likely cause: "
-                "commodity producer misclassified as a consumer — producers benefit from "
-                "commodity price spikes, not suffer from them."
-            ).strip()
             p["verdict"]          = "Bullish"
             p["market_sentiment"] = "Bullish"
-            p["reasoning"]        = full_annotation
-            p["causal_reasoning"] = full_annotation
-            # Clean prose annotation for user-facing analysis fields.
+            # Phase 2A.6: user-facing prose (all six fields, including
+            # causal_reasoning/reasoning) is fully replaced with a single,
+            # ticker-agnostic annotation — no internal "[Takeaway-alignment
+            # correction]" marker, no embedded stale pre-flip reasoning (which
+            # previously left literal "Bearish" text visible after the verdict
+            # became Bullish), and no assumption that the holding is a
+            # commodity producer. The rule that fired remains fully traceable
+            # via RuleResult/rule_results and the logger.info() call below.
             prose_annotation = (
-                "[Takeaway-alignment correction] "
                 "The investor takeaway explicitly recommends increasing exposure to "
-                "this ticker; a Bearish verdict contradicts that guidance. Likely cause: "
-                "commodity producer misclassified as a consumer — producers benefit from "
-                "commodity price spikes, not suffer from them."
+                "this ticker, which conflicts with an initial Bearish assessment; the "
+                "verdict has been aligned to reflect the takeaway's guidance."
             )
+            p["reasoning"]        = prose_annotation
+            p["causal_reasoning"] = prose_annotation
             _sync_prose_to_verdict(p, prose_annotation)
             desc = (
-                f"Takeaway alignment: {p.get('ticker')} Bearish → Bullish "
+                f"[Takeaway-alignment correction] {p.get('ticker')} Bearish → Bullish "
                 "(takeaway explicitly recommends buying this ticker)"
             )
             rule_results.append(RuleResult(

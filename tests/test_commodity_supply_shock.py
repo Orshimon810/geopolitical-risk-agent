@@ -119,10 +119,19 @@ class TestTakeawayMisalignmentDetection:
         assert rule_results == []
 
     def test_reasoning_annotated_on_correction(self):
+        """
+        Phase 2A.6: the correction annotation must replace the reasoning text
+        (proving the flip actually re-synced prose), but the internal
+        "[Takeaway-alignment correction]" marker must not leak into user-facing
+        prose — it stays in RuleResult/rule_results and the debug log only.
+        """
         impacts = [_h("ALB", "Bearish", "producer misclassified")]
         takeaway = ["Buy ALB — lithium spike is a revenue tailwind"]
-        result, _ = detect_takeaway_misalignments(impacts, takeaway)
-        assert "[Takeaway-alignment correction]" in result[0]["reasoning"]
+        result, rule_results = detect_takeaway_misalignments(impacts, takeaway)
+        assert result[0]["reasoning"] != "producer misclassified"
+        assert "[Takeaway-alignment correction]" not in result[0]["reasoning"]
+        assert "commodity producer" not in result[0]["reasoning"].lower()
+        assert "[Takeaway-alignment correction]" in rule_results[0]["description"]
 
     def test_original_dicts_not_mutated(self):
         original = _h("ALB", "Bearish")
