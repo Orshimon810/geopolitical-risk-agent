@@ -254,16 +254,21 @@ def consistency_validator_node(state: DynamicAgentState) -> DynamicAgentState:
     fixed_count = 0
     for p in portfolio_impacts:
         ticker_upper = (p.get("ticker") or "").upper()
-        if ticker_upper in correction_map and p.get("low_materiality_neutralized"):
-            # Protected by the low-materiality no-exposure seal (verdict_rules.py:
-            # enforce_low_materiality_no_exposure_neutrality). That seal exists to make
-            # this correction deterministic; letting the LLM-driven consistency check
-            # flip it back would silently defeat the seal, so skip applying the
+        if ticker_upper in correction_map and (
+            p.get("low_materiality_neutralized") or p.get("balanced_vector_calibrated")
+        ):
+            # Protected by a deterministic seal — either the low-materiality
+            # no-exposure seal (verdict_rules.py: enforce_low_materiality_no_exposure_neutrality)
+            # or the P2e trade-policy balanced-vector calibration
+            # (verdict_rules.py: apply_trade_policy_balanced_verdict). Both seals exist
+            # to make the correction deterministic; letting the LLM-driven consistency
+            # check flip them back would silently defeat the seal, so skip applying the
             # proposed correction for this holding.
+            protecting_rule = p.get("low_materiality_rule") or p.get("balanced_vector_rule")
             logger.info(
                 "consistency_validator: skipping LLM correction for %s — protected by "
-                "low_materiality_neutralized seal (rule=%s)",
-                p.get("ticker"), p.get("low_materiality_rule"),
+                "deterministic seal (rule=%s)",
+                p.get("ticker"), protecting_rule,
             )
             corrected_impacts.append(p)
         elif ticker_upper in correction_map:
