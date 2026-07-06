@@ -418,6 +418,16 @@ class TestEUChinaEVTariffSnapshot:
         assert alb["balanced_vector_calibrated"] is True
         assert alb["balanced_vector_rule"] == "T11"
 
+        # --- Phase 2A.5: no internal "[T10:"/"[T11:" bracket marker in user-facing prose ---
+        for p in (bmw, alb):
+            for field in ("short_term_analysis", "long_term_analysis",
+                          "short_term_impact", "long_term_impact",
+                          "causal_reasoning", "reasoning"):
+                text = p.get(field) or ""
+                assert not re.search(r"\[T\d+:", text), (
+                    f"{p['ticker']}.{field} still contains internal marker: {text!r}"
+                )
+
         # --- risk_score unaffected (named exposure channels, not none/macro-risk-sentiment) ---
         assert bmw["risk_score"] == "Medium"
         assert alb["risk_score"] == "Medium"
@@ -664,17 +674,19 @@ class TestBalancedVectorCalibratedConsistencyProtection:
                               "China retaliatory tariffs threaten BMW's China-made exports."),
             ],
             "archetype": "automaker",
+            # Phase 2A.5: causal_reasoning/reasoning no longer carry the bracketed
+            # "[T10: ...]" internal marker — apply_trade_policy_balanced_verdict
+            # stopped appending it to user-facing prose fields. This fixture
+            # reflects that real post-fix shape.
             "causal_reasoning": (
                 "Verdict revised to Neutral: automaker with trade-policy competitive "
                 "upside offset by material China revenue or retaliation risk — no "
-                "single direction dominates at current evidence level. "
-                "[T10: automaker balanced-vector calibration]"
+                "single direction dominates at current evidence level."
             ),
             "reasoning": (
                 "Verdict revised to Neutral: automaker with trade-policy competitive "
                 "upside offset by material China revenue or retaliation risk — no "
-                "single direction dominates at current evidence level. "
-                "[T10: automaker balanced-vector calibration]"
+                "single direction dominates at current evidence level."
             ),
             "short_term_analysis": (
                 "Verdict revised to Neutral: automaker with trade-policy competitive "

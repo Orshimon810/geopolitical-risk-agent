@@ -1311,13 +1311,16 @@ def apply_trade_policy_balanced_verdict(
             p_copy["verdict"]          = new_verdict
             p_copy["market_sentiment"] = new_verdict
             _sync_prose_to_verdict(p_copy, prose_annotation)
-            for field in ("causal_reasoning", "reasoning"):
-                val = p_copy.get(field) or ""
-                p_copy[field] = val + audit_note
+            # Phase 2A.5: the bracketed "[T10: ...]"-style audit_note is
+            # intentionally NOT appended to causal_reasoning/reasoning — those
+            # are user-facing prose fields, and the internal calibration marker
+            # read as debug noise in demo output. Which rule fired remains fully
+            # visible via balanced_vector_rule / balanced_vector_calibrated below
+            # and via the debug log line, which still carries the full note.
             p_copy["balanced_vector_calibrated"] = True
             p_copy["balanced_vector_rule"]       = rule_id
             log_messages.append(
-                f"{ticker}: {current_verdict}→{new_verdict} ({rule_id})"
+                f"{ticker}: {current_verdict}→{new_verdict} ({rule_id}){audit_note}"
             )
             logger.info(
                 "[TRADE_POLICY_BALANCED_VERDICT] %s: %s→%s (%s)",
