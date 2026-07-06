@@ -873,19 +873,34 @@ def _all_holdings_low_materiality_neutralized(portfolio_impacts: list[dict]) -> 
     return True
 
 
+def _join_tickers_naturally(tickers: list[str]) -> str:
+    """Join tickers as a natural English list: 'A', 'A and B', 'A, B, and C'."""
+    if not tickers:
+        return ""
+    if len(tickers) == 1:
+        return tickers[0]
+    if len(tickers) == 2:
+        return f"{tickers[0]} and {tickers[1]}"
+    return ", ".join(tickers[:-1]) + f", and {tickers[-1]}"
+
+
 def _grounded_no_exposure_takeaway(portfolio_impacts: list[dict], query: str) -> list[str]:
     """
     Deterministic, single-bullet takeaway for the case where every holding was
     neutralized by the low-materiality no-exposure seal (verdict_rules.py:
     enforce_low_materiality_no_exposure_neutrality). Bypasses the LLM entirely —
     there is nothing mechanism-specific to say when every holding is unlinked.
+
+    Uses a generic, presentation-safe event phrase rather than a raw slice of the
+    user's query — slicing an arbitrary query string mid-sentence produced
+    grammatically broken, unprofessional output (Phase 2A.4 polish). `query` is
+    accepted for call-site compatibility but intentionally unused here.
     """
-    event_hint = (query[:80] + "...") if len(query) > 80 else query
-    tickers = ", ".join(p.get("ticker", "?") for p in portfolio_impacts)
+    tickers = _join_tickers_naturally([p.get("ticker", "?") for p in portfolio_impacts])
     return [
-        f"This portfolio has limited direct exposure to {event_hint}. Current evidence "
-        f"supports Neutral / Low treatment for {tickers} unless the dispute broadens "
-        "into a wider macro or trade shock."
+        "This portfolio has limited direct exposure to this low-materiality event. "
+        f"Current evidence supports Neutral / Low treatment for {tickers} unless the "
+        "dispute broadens into a wider macro or trade shock."
     ]
 
 

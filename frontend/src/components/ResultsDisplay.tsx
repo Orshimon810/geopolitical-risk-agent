@@ -330,7 +330,7 @@ function PortfolioImpactCard({ impact }: { impact: PortfolioHoldingImpact }) {
       <div className="flex items-start justify-between gap-3">
         <div>
           <span className="font-mono font-bold text-slate-100 text-sm">{impact.ticker}</span>
-          <span className="ml-2 text-xs text-slate-500">{impact.name}</span>
+          <span className="ml-2 text-xs text-slate-500">— {impact.name}</span>
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <span className={`text-[10px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded border ${VERDICT_STYLES[impact.verdict]}`}>

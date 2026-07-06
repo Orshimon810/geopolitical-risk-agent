@@ -514,3 +514,156 @@ class TestTakeawayCoverageGuard:
         alb_count = len(re.findall(r"\bALB\b", combined, re.IGNORECASE))
         assert bmw_count == 1, f"BMW mentioned {bmw_count} times (expected 1, no duplicate)"
         assert alb_count == 1, f"ALB mentioned {alb_count} times (expected 1, no duplicate)"
+
+
+# ===========================================================================
+# TestArchetypeResolutionFromEnrichedPortfolio (Phase 2A.2)
+#
+# Real production TickerHoldingAnalysis / ticker_analyses dicts never carry an
+# "archetype" key (schemas_portfolio.py has no such field). Every test above
+# this point hand-injects "archetype" directly onto the impact dict, which is
+# NOT how the real reduce-node pipeline builds that dict. These tests mimic
+# the real production shape instead: no "archetype" key on the impact dict,
+# resolved only via enriched_portfolio, mirroring how enforce_archetype_bounds()
+# already resolves archetype.
+# ===========================================================================
+
+def _make_impact_no_archetype(ticker: str, verdict: str, vectors: list[dict]) -> dict:
+    """Production-shaped impact dict: no 'archetype' key at all."""
+    return {
+        "ticker": ticker,
+        "name": ticker,
+        "market_sentiment": verdict,
+        "verdict": verdict,
+        "risk_score": "Medium",
+        "confidence": "Medium",
+        "short_term_analysis": "Original short term.",
+        "long_term_analysis": "Original long term.",
+        "short_term_impact": "Original short term.",
+        "long_term_impact": "Original long term.",
+        "causal_reasoning": "Original reasoning.",
+        "reasoning": "Original reasoning.",
+        "exposure_vectors": vectors,
+    }
+
+
+class TestArchetypeResolutionFromEnrichedPortfolio:
+
+    def test_A_bmw_like_automaker_resolved_from_enriched_portfolio_fires_T10(self):
+        """
+        Impact dict has no 'archetype' key (real production shape). Archetype
+        is resolved only via enriched_portfolio. T10 must still fire.
+        """
+        assert "archetype" not in _make_impact_no_archetype("BMW", "Bullish", [])
+
+        vectors = [
+            _make_vector("competitive-position", "positive", "medium", "high"),
+            _make_vector("geographic-revenue", "negative", "medium", "high"),
+        ]
+        impact = _make_impact_no_archetype("BMW", "Bullish", vectors)
+        enriched_portfolio = [{"ticker": "BMW", "archetype": "automaker"}]
+
+        result, log = apply_trade_policy_balanced_verdict(
+            [impact], "trade_policy_tariff", enriched_portfolio,
+        )
+
+        p = result[0]
+        assert p["verdict"] == "Neutral"
+        assert p["market_sentiment"] == "Neutral"
+        assert p["balanced_vector_calibrated"] is True
+        assert p["balanced_vector_rule"] == "T10"
+        assert log and "T10" in log[0]
+
+        # Prose synced to Neutral — no stale Bullish-only framing survives.
+        for field in ("short_term_analysis", "long_term_analysis",
+                      "short_term_impact", "long_term_impact"):
+            assert p[field] != "Original short term."
+            assert p[field] != "Original long term."
+            assert "bullish" not in p[field].lower()
+
+    def test_B_alb_like_battery_supplier_resolved_from_enriched_portfolio_fires_T11(self):
+        """
+        Impact dict has no 'archetype' key. Archetype resolved only via
+        enriched_portfolio. T11 must still fire.
+        """
+        vectors = [
+            _make_vector("indirect-demand", "positive", "medium", "medium"),
+        ]
+        impact = _make_impact_no_archetype("ALB", "Bullish", vectors)
+        enriched_portfolio = [{"ticker": "ALB", "archetype": "battery_or_lithium_supplier"}]
+
+        result, log = apply_trade_policy_balanced_verdict(
+            [impact], "trade_policy_tariff", enriched_portfolio,
+        )
+
+        p = result[0]
+        assert p["verdict"] == "Neutral"
+        assert p["market_sentiment"] == "Neutral"
+        assert p["balanced_vector_calibrated"] is True
+        assert p["balanced_vector_rule"] == "T11"
+        assert log and "T11" in log[0]
+
+        for field in ("short_term_analysis", "long_term_analysis",
+                      "short_term_impact", "long_term_impact"):
+            assert p[field] != "Original short term."
+            assert p[field] != "Original long term."
+
+    def test_C_no_enriched_portfolio_and_no_archetype_is_noop(self):
+        """
+        Without archetype anywhere (no dict field, no enriched_portfolio match),
+        T10/T11 must not fire — archetype-agnostic rules may still apply, but
+        this fixture is deliberately built so none of T4/T5/T6/T7/T9 match either
+        (single positive vector, no negative vector at all), isolating the
+        T10/T11 no-resolution behavior.
+        """
+        vectors = [
+            _make_vector("competitive-position", "positive", "medium", "high"),
+        ]
+        impact = _make_impact_no_archetype("BMW", "Bullish", vectors)
+
+        result, log = apply_trade_policy_balanced_verdict(
+            [impact], "trade_policy_tariff", enriched_portfolio=None,
+        )
+
+        assert result[0]["verdict"] == "Bullish"
+        assert not result[0].get("balanced_vector_calibrated")
+        assert log == []
+
+    def test_C_direct_archetype_on_dict_takes_precedence_over_enriched_portfolio(self):
+        """
+        Backward compatibility + precedence: when archetype is present directly
+        on the impact dict (existing unit-test shape), it takes precedence over
+        any conflicting enriched_portfolio entry.
+        """
+        vectors = [
+            _make_vector("competitive-position", "positive", "medium", "high"),
+            _make_vector("geographic-revenue", "negative", "medium", "high"),
+        ]
+        impact = _make_impact(ticker="BMW", verdict="Bullish", vectors=vectors, archetype="automaker")
+        # Conflicting enriched_portfolio entry — must NOT override the dict's own value.
+        enriched_portfolio = [{"ticker": "BMW", "archetype": "commodity_producer"}]
+
+        result, log = apply_trade_policy_balanced_verdict(
+            [impact], "trade_policy_tariff", enriched_portfolio,
+        )
+
+        # T10 (automaker) must still fire, proving the dict's own "archetype" won.
+        assert result[0]["verdict"] == "Neutral"
+        assert result[0]["balanced_vector_rule"] == "T10"
+
+    def test_C_existing_call_signature_without_enriched_portfolio_still_works(self):
+        """
+        Existing callers that invoke apply_trade_policy_balanced_verdict with only
+        two positional args (impacts, event_type) — as every pre-Phase-2A.2 test
+        does — must be unaffected by the new optional third parameter.
+        """
+        vectors = [
+            _make_vector("competitive-position", "positive", "medium", "high"),
+            _make_vector("geographic-revenue", "negative", "medium", "high"),
+        ]
+        impact = _make_impact(ticker="BMW", verdict="Bullish", vectors=vectors, archetype="automaker")
+
+        result, log = apply_trade_policy_balanced_verdict([impact], "trade_policy_tariff")
+
+        assert result[0]["verdict"] == "Neutral"
+        assert result[0]["balanced_vector_rule"] == "T10"
