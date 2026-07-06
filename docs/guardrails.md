@@ -84,7 +84,7 @@ Legend: V = verdict/market_sentiment, R = risk_score/confidence, P = prose (6 fi
 | `enforce_defense_contractor_verdicts` | `verdict_rules.py:674–742` | reduce step 2 | impacts[].ticker/verdict/causal_reasoning/prose | market_sentiment, verdict, causal_reasoning, reasoning, prose | ✓ | ✗ | ✓ | ✗ | Pre-dates listed milestones (early tactical ticker-list patch) | Tactical (hardcoded ticker frozenset) | **Duplicates** defense branch of `enforce_archetype_bounds` Pass 2 (identical `_DEFENSE_ESCALATION_RE`, identical Bullish→Neutral cap) | Keep but document — see [Known overlaps](#4-known-overlaps) |
 | `enforce_archetype_bounds` (Pass 1: forbidden-prose scrub; Pass 2: defense verdict cap) | `verdict_rules.py:761–914` | reduce step 3 | impacts[], enriched_portfolio (archetype), forbidden_prose_patterns per archetype | prose (Pass 1), verdict/market_sentiment (Pass 2, defense_contractor only) | ✓ (defense only) | ✗ | ✓ | ✗ | P2a–P2d archetype system | Architectural (generalized, archetype-driven) | Pass 1 overlaps `_apply_nvda_prose_guard` for NVDA; Pass 2 overlaps `enforce_defense_contractor_verdicts` | Keep — long-term owner for both defense-contractor and NVDA-style prose bounds |
 | `detect_takeaway_misalignments` | `verdict_rules.py:290–383` | reduce step 4; re-run in consistency pre-pass | impacts[], investor_takeaway, `balanced_vector_calibrated` flag | verdict, market_sentiment, prose | ✓ | ✗ | ✓ | ✗ (reads T, doesn't write it) | Pre-dates P2e, best guess | Tactical | Runs twice per request (reduce + CV pre-pass) | Keep but document double-invocation |
-| `apply_trade_policy_balanced_verdict` (rules T4–T11) | `verdict_rules.py:1105–1314` | reduce step 5, only when `event_type == "trade_policy_tariff"` | impacts[].exposure_vectors, archetype, verdict | verdict, market_sentiment, prose, `balanced_vector_calibrated`, `balanced_vector_rule` flags | ✓ | ✗ | ✓ | ✗ | P2e trade-policy exposure vectors | Architectural (P2e core deliverable) | No direct duplicate | Keep but document — see tracked risk in section 5 |
+| `apply_trade_policy_balanced_verdict` (rules T4–T11) | `verdict_rules.py:1105–1314` | reduce step 5, only when `event_type == "trade_policy_tariff"` | impacts[].exposure_vectors/archetype/verdict, **`enriched_portfolio` (Phase 2A.2)** | verdict, market_sentiment, prose, `balanced_vector_calibrated`, `balanced_vector_rule` flags | ✓ | ✗ | ✓ | ✗ | P2e trade-policy exposure vectors; archetype-resolution wiring fixed Phase 2A.2 | Architectural (P2e core deliverable) | No direct duplicate | Keep — see [Tracked stabilization risks](#5-tracked-stabilization-risks) for the Phase 2A.2 fix history |
 | `_apply_risk_score_caps` | `nodes_reduce.py` (~170–226) | reduce step 6 | impacts[].exposure_channel, risk_score, event_materiality | risk_score | ✗ | ✓ | ✗ | ✗ | Reset M2.5 (ticker hygiene) | Tactical | Overlaps conceptually with RULE 9 prompt instruction (same rule, enforced twice) | Keep — correct ticker-level owner |
 | `_apply_nvda_prose_guard` | `nodes_reduce.py` (~86–137) | reduce step 7, NVDA only | impacts[].ticker=="NVDA", short/long_analysis, causal_reasoning | prose (3 fields + legacy aliases) | ✗ | ✗ | ✓ | ✗ | Pre-dates archetype system, best guess | Legacy/tactical (ticker-hardcoded, not archetype-driven) | **Triplicated** with archetype `fabless_ai_chip_designer.forbidden_prose_patterns`, RULE 8 NVIDIA prompt text, and `nodes_macro_context.py`'s `_TICKER_BUSINESS_MODEL_HINTS["NVDA"]` | Candidate for deletion after regression tests — strongest single consolidation candidate in the registry |
 | `_flag_numeric_precision_violations` | `nodes_reduce.py` (~229–257) | reduce step 8 | impacts[] prose | none (detection/logging only) | ✗ | ✗ | ✗ | ✗ | — | Tactical (diagnostic) | Detects same regex family as `scrub_numeric_ranges` but doesn't fix | Keep — cheap, detection-only |
@@ -198,6 +198,45 @@ deterministic pre-pass.
   `detect_takeaway_misalignments`, or `apply_trade_policy_balanced_verdict`).
 - The regression test above now passes and locks this protection in going forward. Full
   suite: 508 passed, 0 failed after the fix.
+
+### P2e T10/T11 archetype-resolution wiring gap — CONFIRMED and FIXED (Phase 2A.2)
+
+- Manual QA on the EU Chinese EV tariffs benchmark found `BMW.DE` and `VWAGY` remained
+  Bullish instead of being calibrated to Neutral by T10, contradicting the Phase 2A
+  snapshot's expectation.
+- Root cause: `apply_trade_policy_balanced_verdict()` read `p.get("archetype")` directly off
+  each ticker's own impact dict, but the real `TickerHoldingAnalysis` schema
+  (`schemas_portfolio.py:188–269`) has **no `archetype` field at all** — so in the real
+  reduce-node production path, `archetype` was always `None` for every holding, meaning
+  T10/T11 (both archetype-gated) could never fire for *any* ticker, not just BMW.DE/VWAGY.
+  Every prior P2e/Phase 2A test passed only because their hand-built fixtures injected
+  `"archetype": "automaker"` etc. directly onto the impact dict — a shape the real pipeline
+  never produces. (T4/T5/T6/T7/T9 are archetype-agnostic and were unaffected.)
+- Phase 2A.2 fix: `apply_trade_policy_balanced_verdict()` now accepts an optional
+  `enriched_portfolio` parameter (`verdict_rules.py`) and resolves archetype with precedence
+  `p.get("archetype") or archetype_by_ticker.get(ticker_upper)`, mirroring how
+  `enforce_archetype_bounds()` already resolves archetype from `enriched_portfolio`.
+  `reduce_ticker_results_node` (`nodes_reduce.py`) now passes `enriched_portfolio` into the
+  call. Existing calls with only `(impacts, event_type)` remain valid — the new parameter
+  defaults to `None`.
+- New regression tests added in `tests/test_p2e_trade_policy.py`
+  (`TestArchetypeResolutionFromEnrichedPortfolio`) prove T10/T11 fire when archetype comes
+  *only* from `enriched_portfolio` (no `archetype` key on the impact dict at all — the true
+  production shape), and that direct dict-level `archetype` still takes precedence for
+  backward compatibility. `tests/test_phase2a_benchmark_snapshots.py`'s EU snapshot fixture
+  was also updated to drop the hand-injected `archetype` key, so it now exercises the real
+  wiring path end-to-end instead of the optimistic shortcut.
+- **Reported separately, then fixed in Phase 2A.3:** even with the wiring fix, `BMW.DE` and
+  `VWAGY` specifically still failed to resolve an archetype, because `TICKER_ARCHETYPE_MAP`
+  (`archetypes.py`) had no `.DE`-suffix normalization and no `VWAGY` entry (only bare `BMW`
+  and `VOW3`). Phase 2A.3 added two explicit, narrow map entries —
+  `"BMW.DE": "automaker"` and `"VWAGY": "automaker"` — as exact-string aliases for these two
+  benchmark/demo symbols specifically. This is **not** general suffix stripping or ADR
+  normalization (e.g. `.DE`/`.SW`/`.F` are not handled generically); it is two explicit
+  dictionary entries, scoped to the symbols the manual EU Chinese EV tariffs benchmark
+  actually uses. Any other missing benchmark symbol found later should get the same
+  narrow, explicit treatment rather than a generic normalization rule, unless a separate
+  decision is made to generalize.
 
 ---
 
@@ -320,3 +359,57 @@ next phase has a concrete checklist.
   live inside more generically-named test files (`test_archetype_bounds.py`,
   `test_p2e_trade_policy.py`). Confirm this mapping directly before treating those
   benchmarks as covered in the regression-snapshot sense required by section 7.
+
+---
+
+## 10. Phase 2A.4 — demo/presentation polish
+
+Display-only changes; no reasoning, guardrail, verdict, risk_score/confidence, P2e
+calibration, `consistency_validator_node`, archetype, NVDA, defense-contractor, or numeric
+scrubber logic was touched. Full backend suite unaffected: 516 passed, 0 failed
+(no new backend tests were needed — these are pure formatting changes).
+
+**Implemented:**
+
+1. **Ticker/company name spacing** — `frontend/src/components/ResultsDisplay.tsx`'s
+   `PortfolioImpactCard` now renders `{impact.ticker}` and `— {impact.name}` (literal em-dash
+   in the text content, not just a CSS margin). The prior version relied solely on a Tailwind
+   `ml-2` class for visual spacing, which produces no separator character when the rendered
+   text is copied, scraped, or read via accessibility tools — explaining the
+   "MSFTMicrosoft Corporation"-style concatenation seen in manual QA.
+2. **Low-materiality grounded takeaway wording** — `_grounded_no_exposure_takeaway()` in
+   `nodes_analysis.py` no longer slices the raw user query into the output sentence (which
+   produced grammatically broken text like "...exposure to There is a temporary diplomatic
+   dispute..."). It now uses a fixed, generic phrase ("this low-materiality event") and joins
+   tickers with natural English list formatting via a new small helper,
+   `_join_tickers_naturally()` ("A, B, and C" instead of "A, B, C"). The `query` parameter is
+   still accepted (call-site unchanged) but intentionally unused. LLM prompt behavior
+   elsewhere is untouched — this only affects the deterministic no-LLM-call fallback path.
+3. **Country-detection empty-state note hidden** — `frontend/src/components/MarketSignals.tsx`
+   no longer renders `signals.note` unless `macroRows.length > 0`. Since the backend
+   (`nodes_signals.py`) only ever sets `note` in the "no countries detected" branch (the only
+   place that string is assigned), and that branch always leaves `signals.countries` — and
+   therefore `macroRows` — empty, this condition reliably hides the note in exactly the case
+   the polish request targeted, without changing the backend string or wording it differently.
+
+**Not implemented — investor-takeaway near-duplicate bullet removal:**
+
+The request was to drop ticker-specific takeaway bullets that duplicate a "clearer final
+grouped bullet" for the same ticker. This was evaluated and **not implemented** because there
+is no safe, deterministic way to distinguish a true duplicate from a second bullet that
+mentions the same ticker for a genuinely different reason (e.g. one bullet citing competitive
+upside, another citing a separate retaliation-risk mechanism for the same holding) — removing
+the "second" bullet on ticker-overlap alone risks silently deleting real, non-redundant
+content. Two supporting facts:
+
+- The deterministic coverage gap-fill logic in `_build_portfolio_takeaway()` (`nodes_analysis.py`)
+  already does not add duplicate bullets for tickers the LLM already covered — this is
+  directly tested by `tests/test_p2e_trade_policy.py::TestTakeawayCoverageGuard::test_already_covered_no_duplicate`.
+  So the repetition observed in manual QA came from the underlying live LLM's own bullet
+  generation, not from a deterministic step that could be patched at the display or
+  post-processing layer without semantic judgment.
+- Building that semantic judgment deterministically (without another LLM call, which was
+  explicitly out of scope) would require guessing at "sameness" from surface text overlap
+  alone — a heuristic that is more likely to remove legitimate content than to improve
+  presentation. Per the task's own instruction ("if deduplication is risky, do not implement
+  it; just report why and leave it documented"), this is deferred, not implemented.

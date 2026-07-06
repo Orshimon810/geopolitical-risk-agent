@@ -207,6 +207,25 @@ class TestTickerArchetypeMap:
                 f"Expected ticker '{ticker}' not in TICKER_ARCHETYPE_MAP"
             )
 
+    def test_bmw_de_demo_symbol_maps_to_automaker(self):
+        """Phase 2A.3: UI-suggested symbol for Bayerische Motoren Werke."""
+        rules = get_ticker_archetype("BMW.DE")
+        assert rules is not None
+        assert rules.archetype_id == "automaker"
+
+    def test_vwagy_demo_symbol_maps_to_automaker(self):
+        """Phase 2A.3: Volkswagen AG US OTC ADR symbol used in the manual benchmark."""
+        rules = get_ticker_archetype("VWAGY")
+        assert rules is not None
+        assert rules.archetype_id == "automaker"
+
+    def test_existing_bmw_and_vow3_mappings_unaffected(self):
+        """Adding BMW.DE / VWAGY aliases must not disturb the existing plain symbols."""
+        bmw = get_ticker_archetype("BMW")
+        vow3 = get_ticker_archetype("VOW3")
+        assert bmw is not None and bmw.archetype_id == "automaker"
+        assert vow3 is not None and vow3.archetype_id == "automaker"
+
 
 # ---------------------------------------------------------------------------
 # TestArchetypeDistinctions (regression-prevention)

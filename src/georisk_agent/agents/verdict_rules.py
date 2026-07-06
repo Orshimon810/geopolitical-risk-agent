@@ -1105,6 +1105,7 @@ def _vecs_negative_medium_plus(vectors: list[dict]) -> bool:
 def apply_trade_policy_balanced_verdict(
     impacts: list[dict],
     event_type: str | None,
+    enriched_portfolio: list[dict] | None = None,
 ) -> tuple[list[dict], list[str]]:
     """
     Deterministic balanced-verdict calibration for trade_policy_tariff events.
@@ -1121,6 +1122,14 @@ def apply_trade_policy_balanced_verdict(
       T7  — all positive vectors are indirect-demand (no high/high)
       T9  — dominant negative high+ vector with no positive medium+
 
+    Archetype resolution (T10/T11 only — T4/T5/T6/T7/T9 are archetype-agnostic):
+    the real production `TickerHoldingAnalysis` schema has no `archetype` field, so a
+    holding's archetype is resolved with this precedence:
+      1. p.get("archetype") — set directly on the impact dict (existing unit-test shape).
+      2. enriched_portfolio lookup by ticker (real reduce-node production shape;
+         mirrors how enforce_archetype_bounds() already resolves archetype).
+      3. None — T10/T11 simply do not fire; T4/T5/T6/T7/T9 remain available.
+
     M1 invariant: every verdict override calls _sync_prose_to_verdict() immediately
     on the shallow copy — no deferral to the consistency validator.
 
@@ -1132,6 +1141,13 @@ def apply_trade_policy_balanced_verdict(
     """
     if event_type != "trade_policy_tariff":
         return impacts, []
+
+    archetype_by_ticker: dict[str, str] = {}
+    for eh in (enriched_portfolio or []):
+        t = (eh.get("ticker") or "").upper()
+        aid = eh.get("archetype")
+        if t and aid:
+            archetype_by_ticker[t] = aid
 
     log_messages: list[str] = []
     result: list[dict] = []
@@ -1155,8 +1171,8 @@ def apply_trade_policy_balanced_verdict(
             continue
 
         current_verdict = p.get("market_sentiment") or p.get("verdict", "Neutral")
-        archetype = p.get("archetype")
         ticker = p.get("ticker", "?")
+        archetype = p.get("archetype") or archetype_by_ticker.get(ticker.upper())
 
         new_verdict: str | None = None
         prose_annotation: str = ""

@@ -362,8 +362,14 @@ def reduce_ticker_results_node(state: DynamicAgentState) -> DynamicAgentState:
 
     # 2b. Trade-policy balanced verdict calibration (P2e guardrail 7).
     #     Only fires when event_type == "trade_policy_tariff"; no-op otherwise.
+    #     enriched_portfolio is passed so T10/T11 can resolve archetype the same
+    #     way enforce_archetype_bounds() does — the real TickerHoldingAnalysis
+    #     schema has no "archetype" field, so relying on p.get("archetype") alone
+    #     would leave T10/T11 unreachable in production (Phase 2A.2 fix).
     event_type = state.get("event_type")
-    ordered, trade_calibration_log = apply_trade_policy_balanced_verdict(ordered, event_type)
+    ordered, trade_calibration_log = apply_trade_policy_balanced_verdict(
+        ordered, event_type, enriched_portfolio,
+    )
     if trade_calibration_log:
         logger.info(
             "reduce_ticker_results_node: trade_policy_balanced_verdict applied: %s",
