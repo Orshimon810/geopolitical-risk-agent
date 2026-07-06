@@ -195,7 +195,11 @@ export function MarketSignals({ signals }: MarketSignalsProps) {
         </div>
       )}
 
-      {signals.note && (
+      {/* signals.note is only ever set for the "no countries detected" case
+          (nodes_signals.py) — displaying it reads as a failure message rather
+          than a neutral non-event, so it's hidden entirely at the display
+          layer rather than shown with reworded text (Phase 2A.4 polish). */}
+      {signals.note && macroRows.length > 0 && (
         <p className="text-[10px] text-slate-600 italic data-mono">{signals.note}</p>
       )}
     </div>

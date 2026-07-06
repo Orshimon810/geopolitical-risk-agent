@@ -700,6 +700,12 @@ TICKER_ARCHETYPE_MAP: dict[str, str] = {
     "STLA": "automaker",
     "BMW":  "automaker",
     "VOW3": "automaker",
+    # Benchmark/demo symbol aliases (Phase 2A.3) — exact ticker strings used by
+    # the UI/manual EU Chinese EV tariffs benchmark. Not a general suffix/ADR
+    # normalization rule; add further aliases explicitly, one at a time, if a
+    # specific benchmark symbol is found to be missing.
+    "BMW.DE": "automaker",  # Bayerische Motoren Werke, XETRA listing (UI-suggested symbol)
+    "VWAGY":  "automaker",  # Volkswagen AG, US OTC ADR
     # EV manufacturers
     "TSLA": "ev_manufacturer",
     "RIVN": "ev_manufacturer",

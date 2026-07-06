@@ -266,6 +266,14 @@ def _eu_ev_entry(
     geographic_asset_footprint,
     economic_role: str,
 ) -> dict:
+    # NOTE (Phase 2A.2): deliberately does NOT include an "archetype" key on the
+    # returned dict — real production TickerHoldingAnalysis/ticker_analyses dicts
+    # never carry one (schemas_portfolio.py has no such field). The `archetype`
+    # parameter here is used only by the caller to build enriched_portfolio,
+    # which is how apply_trade_policy_balanced_verdict() must resolve it in the
+    # real reduce-node path. This keeps the benchmark snapshot faithful to the
+    # actual production shape rather than the optimistic hand-injected shape
+    # that masked the wiring bug manual QA found.
     return {
         "ticker": ticker,
         "name": name,
@@ -275,7 +283,6 @@ def _eu_ev_entry(
         "confidence": "Medium",
         "exposure_channel": vectors[0]["channel"] if vectors else "macro-risk-sentiment",
         "exposure_vectors": vectors,
-        "archetype": archetype,
         "causal_reasoning": causal_reasoning,
         "reasoning": causal_reasoning,
         "short_term_analysis": short_term_analysis,
@@ -359,6 +366,15 @@ class TestEUChinaEVTariffSnapshot:
         from georisk_agent.agents.nodes_reduce import reduce_ticker_results_node
 
         state, bmw_o_short, bmw_o_long, alb_o_short, alb_o_long = self._build_state()
+
+        # Phase 2A.2: confirm the fixture matches real production shape — neither
+        # ticker_analyses entry carries an "archetype" key. T10/T11 must resolve
+        # archetype only via state["enriched_portfolio"] below.
+        for entry in state["ticker_analyses"]:
+            assert "archetype" not in entry, (
+                f"{entry['ticker']}: fixture must not hand-inject 'archetype' — "
+                "real TickerHoldingAnalysis dicts never carry this key"
+            )
 
         net_mock = PortfolioNetSynthesis(
             bull_count=0,
