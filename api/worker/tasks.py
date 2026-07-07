@@ -42,6 +42,7 @@ from langchain_core.outputs import LLMResult
 
 from api.core.query_cache import set_cached_result_sync
 from api.worker.celery_app import celery_app
+from georisk_agent.agents.result_shaping import extract_ui_result
 from georisk_agent.app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -87,21 +88,6 @@ def _patch_task_state(r: sync_redis.Redis, task_id: str, patch: dict) -> None:
     r.setex(f"task:{task_id}", _TASK_TTL_SECONDS, json.dumps(state))
 
 
-def _extract_result(values: dict) -> dict[str, Any]:
-    result: dict[str, Any] = {
-        "market_impacts":      values.get("market_impacts", []),
-        "risks":               values.get("risks", []),
-        "scenarios":           values.get("scenarios", []),
-        "investor_takeaway":   values.get("investor_takeaway", []),
-        "confidence":          values.get("confidence", "Low"),
-        "sources":             values.get("sources", []),
-        "signals":             values.get("signals", {}),
-        "review_log":          values.get("review_log", []),
-        "data_contradictions": values.get("data_contradictions", []),
-    }
-    if values.get("portfolio_impacts") is not None:
-        result["portfolio_impacts"] = values["portfolio_impacts"]
-    return result
 
 
 def _persist_analysis(
@@ -357,7 +343,7 @@ def resume_geopolitical_agent_task(self, original_task_id: str, user_id: str) ->
 
             duration_ms = int((time.perf_counter() - t0) * 1000)
             tokens_used = counter.total_tokens or None
-            result = _extract_result(final_state)
+            result = extract_ui_result(final_state)
 
             # ── Persist to DB (native async — no ThreadPoolExecutor needed) ──
             analysis_id: str | None = None
