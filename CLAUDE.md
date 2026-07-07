@@ -52,6 +52,11 @@ python scripts/run_planner.py
 # Run evaluation suite (8 benchmark queries scored 0-10)
 python evaluation/run_eval.py
 
+# Run Phase 2A UI-payload regression stress test (deterministic, 0-60 + leak detection)
+# Default: the 3 locked-behavior benchmarks (semiconductor de-escalation, EU Chinese EV
+# tariffs, luxury wine low-materiality). Add --all for the full benchmark_queries.py suite.
+python evaluation/stress_test.py
+
 # Run tests (pure unit tests — no external services required)
 pytest tests/ -v
 
