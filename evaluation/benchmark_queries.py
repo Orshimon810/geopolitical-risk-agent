@@ -71,17 +71,23 @@ BENCHMARK_QUERIES = [
     # Test 11: alleged positive event with semiconductor portfolio — Fixes 1, 2, 3
     # Alleged certainty must produce conditional framing; portfolio_net must reflect
     # post-validation verdicts; validator must see full 300-char prose.
+    #
+    # Phase 2A regression lock — "Semiconductor de-escalation": LMT added so this
+    # query also exercises the defense-contractor de-escalation cap covered by the
+    # mocked node-level snapshot in tests/test_phase2a_benchmark_snapshots.py.
     {
         "query": (
             "Reports suggest the US and China may be nearing a deal to ease semiconductor "
             "export restrictions. How would this affect semiconductor-heavy portfolios?"
         ),
         "focus": "event_certainty_alleged_positive",
+        "phase2a_lock": "semiconductor_deescalation",
         "portfolio": [
             {"ticker": "NVDA", "name": "NVIDIA Corporation",                   "asset_type": "stock"},
             {"ticker": "ASML", "name": "ASML Holding NV",                       "asset_type": "stock"},
             {"ticker": "TSM",  "name": "Taiwan Semiconductor Manufacturing",    "asset_type": "stock"},
             {"ticker": "AAPL", "name": "Apple Inc.",                            "asset_type": "stock"},
+            {"ticker": "LMT",  "name": "Lockheed Martin Corporation",           "asset_type": "stock"},
         ],
     },
 
@@ -106,12 +112,53 @@ BENCHMARK_QUERIES = [
     # Test 13: confirmed trade policy — EU Chinese EV tariffs
     # Confirmed regulatory event; tests transmission mechanism reasoning across
     # European OEMs, Chinese exporters, and battery supply chains.
+    #
+    # Phase 2A regression lock — "EU Chinese EV tariffs": portfolio added so this
+    # query also exercises trade-policy exposure vectors, balanced-verdict
+    # calibration (T10/T11), and the Tesla-not-a-commodity-producer regression
+    # covered by the mocked node-level snapshot in
+    # tests/test_phase2a_benchmark_snapshots.py.
     {
         "query": (
             "The EU has confirmed provisional tariffs of up to 38% on Chinese electric vehicle imports. "
             "How will this affect European automakers, Chinese EV exporters, and battery supply chains?"
         ),
         "focus": "transmission_mechanisms",
+        "phase2a_lock": "eu_china_ev_tariffs",
+        "portfolio": [
+            {"ticker": "TSLA",  "name": "Tesla, Inc.",                "asset_type": "stock"},
+            {"ticker": "NIO",   "name": "NIO Inc.",                    "asset_type": "stock"},
+            {"ticker": "VWAGY", "name": "Volkswagen AG",               "asset_type": "stock"},
+            {"ticker": "ALB",   "name": "Albemarle Corporation",       "asset_type": "stock"},
+        ],
+    },
+
+    # Test 14: low-materiality bilateral dispute — luxury wine export restriction
+    #
+    # Phase 2A regression lock — "Luxury wine low-materiality dispute": tests
+    # low-materiality handling, false-premise resistance, confidence calibration,
+    # and no-exposure portfolio neutralization, mirroring the mocked node-level
+    # snapshot in tests/test_phase2a_benchmark_snapshots.py.
+    {
+        "query": (
+            "There is a temporary diplomatic dispute between two small European countries, "
+            "and as a result, one of them is restricting exports of luxury wine for the next "
+            "few months. How meaningful is this for global markets, and could it affect my "
+            "portfolio?"
+        ),
+        "focus": "low_materiality_calibration",
+        "phase2a_lock": "luxury_wine_low_materiality",
+        "portfolio": [
+            {"ticker": "MSFT", "name": "Microsoft Corporation",  "asset_type": "stock"},
+            {"ticker": "JPM",  "name": "JPMorgan Chase & Co.",   "asset_type": "stock"},
+            {"ticker": "NVDA", "name": "NVIDIA Corporation",     "asset_type": "stock"},
+            {"ticker": "WMT",  "name": "Walmart Inc.",           "asset_type": "stock"},
+            {"ticker": "UNH",  "name": "UnitedHealth Group Inc.", "asset_type": "stock"},
+        ],
     },
 
 ]
+
+# Phase 2A locked-behavior benchmarks (see evaluation/scenario_assertions.py).
+# The default `evaluation/stress_test.py` invocation runs only these three.
+PHASE2A_LOCK_QUERIES = [q for q in BENCHMARK_QUERIES if q.get("phase2a_lock")]
