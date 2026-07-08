@@ -211,3 +211,6 @@ evaluation/run_eval_100pt.py
 
 # MCP config (contains API keys)
 .mcp.json
+
+# Understand Anything knowledge graph (local-only tooling artifact)
+.understand-anything/
